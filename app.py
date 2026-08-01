@@ -1,9 +1,0 @@
-SECRET_KEY=generate-a-long-random-value
-DATABASE_URL=postgresql+psycopg://user:password@host:5432/fleettrack
-PUBLIC_BASE_URL=https://your-service.onrender.com
-COOKIE_SECURE=1
-ADMIN_PASSWORD=change-before-first-deploy
-PAYFAST_MODE=sandbox
-PAYFAST_MERCHANT_ID=your-sandbox-merchant-id
-PAYFAST_MERCHANT_KEY=your-sandbox-merchant-key
-PAYFAST_PASSPHRASE=your-sandbox-passphrase
