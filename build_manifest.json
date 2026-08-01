@@ -1,0 +1,13 @@
+.env
+.env.*
+!.env.example
+instance/
+*.db
+*.sqlite*
+data/
+results/
+__pycache__/
+*.pyc
+*.pem
+*.key
+device_secrets.h
