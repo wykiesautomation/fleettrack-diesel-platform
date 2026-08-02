@@ -1,0 +1,7 @@
+Add these two blocks to app/templates/base.html if they do not already exist:
+
+Inside <head>, before </head>:
+{% block head_extra %}{% endblock %}
+
+Before </body>:
+{% block scripts %}{% endblock %}
