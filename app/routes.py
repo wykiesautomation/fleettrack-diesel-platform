@@ -1,12 +1,13 @@
 import secrets, re
 from datetime import datetime, timezone, timedelta
-from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify, abort, session
+from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify, abort, session, current_app
 from flask_login import login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import desc
 from . import db
 from .payfast import config as payfast_config,build_checkout,event_hash,valid_signature,valid_source,server_validate,forwarded_ip
-from .models import Customer,User,Site,Asset,Device,SignalDefinition,Reading,Alarm,Location,WorkspaceProfile,SubscriptionPlan,Subscription,PaymentRecord,PayFastEvent,SubscriptionAuditEvent
+from .production import checks as production_checks, checkout_allowed
+from .models import Customer,User,Site,Asset,Device,SignalDefinition,Reading,Alarm,Location,WorkspaceProfile,SubscriptionPlan,Subscription,PaymentRecord,PayFastEvent,SubscriptionAuditEvent,ProductionGateEvent
 bp=Blueprint('main',__name__)
 
 def utcnow(): return datetime.now(timezone.utc)
@@ -41,7 +42,7 @@ def evaluate_alarm(sig,value):
     elif severity and existing: existing.severity=severity;existing.message=msg;existing.value=value
     elif existing: existing.state='CLOSED';existing.note=(existing.note or '')+' Auto-closed after return to normal.'
 
-ALLOWED_BILLING_ENDPOINTS={'main.public_home','main.login','main.logout','main.register','main.health','main.billing','main.plans','main.select_plan','main.billing_checkout','main.billing_success','main.billing_cancel','main.payfast_notify','static'}
+ALLOWED_BILLING_ENDPOINTS={'main.public_home','main.login','main.logout','main.register','main.health','main.billing','main.plans','main.select_plan','main.billing_checkout','main.billing_success','main.billing_cancel','main.payfast_notify','main.terms','main.privacy','main.payment_policy','main.readiness','main.production_status','static'}
 
 def set_subscription_state(sub,new_state,reason):
     if sub.state!=new_state:
@@ -68,7 +69,25 @@ def enforce_subscription_access():
     if not allowed:return redirect(url_for('main.subscription_required'))
 
 @bp.get('/health')
-def health(): return {'status':'ok','service':'assettrack360-rev17'}
+def health(): return {'status':'ok','service':'assettrack360-rev18'}
+
+@bp.get('/ready')
+def readiness():
+    report=production_checks(current_app)
+    return jsonify(report),200 if report['ready'] else 503
+
+@bp.get('/production-status')
+@login_required
+def production_status():
+    if current_user.role!='platform_admin':abort(403)
+    return render_template('production_status.html',report=production_checks(current_app))
+
+@bp.get('/terms')
+def terms(): return render_template('legal.html',doc='terms')
+@bp.get('/privacy')
+def privacy(): return render_template('legal.html',doc='privacy')
+@bp.get('/payment-policy')
+def payment_policy(): return render_template('legal.html',doc='payment')
 
 @bp.route('/register',methods=['GET','POST'])
 def register():
@@ -83,12 +102,22 @@ def register():
             c=Customer(name=company,slug=slug);db.session.add(c);db.session.flush();u=User(customer_id=c.id,email=email,name=name,role='customer_admin',password_hash=generate_password_hash(password));db.session.add(u);db.session.commit();login_user(u);return redirect(url_for('main.onboarding'))
     return render_template('auth.html',mode='register')
 
+LOGIN_ATTEMPTS={}
+
+def login_rate_limited(ip):
+    now=utcnow();entries=[t for t in LOGIN_ATTEMPTS.get(ip,[]) if (now-t).total_seconds()<900];LOGIN_ATTEMPTS[ip]=entries
+    return len(entries)>=8
+
+def record_login_failure(ip): LOGIN_ATTEMPTS.setdefault(ip,[]).append(utcnow())
+
 @bp.route('/login',methods=['GET','POST'])
 def login():
+    ip=request.headers.get('CF-Connecting-IP') or request.remote_addr or 'unknown'
     if request.method=='POST':
+        if login_rate_limited(ip): flash('Too many failed attempts. Try again in 15 minutes.','error');return render_template('auth.html',mode='login'),429
         u=User.query.filter_by(email=request.form.get('email','').strip().lower()).first()
         if u and u.active and check_password_hash(u.password_hash,request.form.get('password','')):login_user(u);return redirect(url_for('main.dashboard'))
-        flash('Invalid login.','error')
+        record_login_failure(ip);flash('Invalid login.','error')
     return render_template('auth.html',mode='login')
 @bp.get('/logout')
 @login_required
@@ -226,7 +255,10 @@ def billing():
 @login_required
 def billing_checkout():
     cfg=payfast_config();sub=Subscription.query.filter_by(customer_id=tenant_id()).first_or_404()
-    if not cfg['merchant_id'] or not cfg['merchant_key']:flash('PayFast is not configured.','error');return redirect(url_for('main.billing'))
+    gate_ok,gate_report=checkout_allowed(current_app)
+    if not gate_ok:
+        flash('Production checkout is blocked because the final gate is incomplete.','error');return redirect(url_for('main.billing'))
+    if not cfg['merchant_id'] or not cfg['merchant_key'] or not cfg['passphrase']:flash('PayFast is not configured.','error');return redirect(url_for('main.billing'))
     if sub.plan.monthly_price<=0:flash('Industrial plan requires a quote.','error');return redirect(url_for('main.billing'))
     ref=f'AT360-{tenant_id()}-{sub.id}-{secrets.token_hex(6).upper()}';payment=PaymentRecord(customer_id=tenant_id(),subscription_id=sub.id,merchant_payment_id=ref,amount_gross=sub.plan.monthly_price,status='PENDING');db.session.add(payment);db.session.commit();endpoint,fields=build_checkout(sub,payment,current_user,cfg);return render_template('payfast_redirect.html',endpoint=endpoint,fields=fields,payment=payment)
 

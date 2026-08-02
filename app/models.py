@@ -98,3 +98,11 @@ class PayFastEvent(db.Model):
 class SubscriptionAuditEvent(db.Model):
     id=db.Column(db.Integer,primary_key=True); customer_id=db.Column(db.Integer,nullable=False,index=True); subscription_id=db.Column(db.Integer,index=True); previous_state=db.Column(db.String(30)); new_state=db.Column(db.String(30),nullable=False)
     reason=db.Column(db.String(240)); created_at=db.Column(db.DateTime(timezone=True),default=now,nullable=False)
+
+class ProductionGateEvent(db.Model):
+    id=db.Column(db.Integer,primary_key=True)
+    gate_name=db.Column(db.String(80),nullable=False,index=True)
+    status=db.Column(db.String(20),nullable=False)
+    detail=db.Column(db.String(240))
+    environment=db.Column(db.String(20),nullable=False,default='sandbox')
+    created_at=db.Column(db.DateTime(timezone=True),default=now,nullable=False)

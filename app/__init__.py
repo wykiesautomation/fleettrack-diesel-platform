@@ -1,9 +1,10 @@
 import os
 from datetime import datetime, timezone, timedelta
-from flask import Flask
+from flask import Flask, request
 from flask_login import LoginManager
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 db = SQLAlchemy()
 login_manager = LoginManager()
@@ -12,6 +13,7 @@ login_manager.login_view = "main.login"
 
 def create_app(test_config=None):
     app = Flask(__name__)
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
     db_url = os.getenv("DATABASE_URL", "sqlite:///assettrack360.db")
     if db_url.startswith("postgres://"):
         db_url = db_url.replace("postgres://", "postgresql+psycopg://", 1)
@@ -25,11 +27,22 @@ def create_app(test_config=None):
         SESSION_COOKIE_SAMESITE="Lax",
         SESSION_COOKIE_SECURE=os.getenv("COOKIE_SECURE", "false").lower()=="true",
         MAX_CONTENT_LENGTH=1024*1024,
+        PERMANENT_SESSION_LIFETIME=timedelta(hours=12),
     )
     if test_config:
         app.config.update(test_config)
     db.init_app(app); login_manager.init_app(app)
-    from .models import User, Customer, SubscriptionPlan, Subscription, WorkspaceProfile
+    @app.after_request
+    def security_headers(response):
+        response.headers.setdefault('X-Content-Type-Options','nosniff')
+        response.headers.setdefault('X-Frame-Options','DENY')
+        response.headers.setdefault('Referrer-Policy','strict-origin-when-cross-origin')
+        response.headers.setdefault('Permissions-Policy','camera=(), microphone=(), geolocation=(self)')
+        response.headers.setdefault('Content-Security-Policy',"default-src 'self'; style-src 'self' 'unsafe-inline' https://unpkg.com; script-src 'self' 'unsafe-inline' https://unpkg.com; img-src 'self' data: https://*.tile.openstreetmap.org; connect-src 'self'; font-src 'self'; frame-ancestors 'none'; form-action 'self' https://sandbox.payfast.co.za https://www.payfast.co.za")
+        if request.is_secure: response.headers.setdefault('Strict-Transport-Security','max-age=31536000; includeSubDomains')
+        if request.path.startswith(('/billing','/account','/devices','/production')): response.headers.setdefault('Cache-Control','no-store')
+        return response
+    from .models import User, Customer, SubscriptionPlan, Subscription, WorkspaceProfile, ProductionGateEvent
     @login_manager.user_loader
     def load_user(user_id): return db.session.get(User, int(user_id))
     from .routes import bp
