@@ -43,12 +43,12 @@ def create_app(test_config=None):
             db.session.add(customer); db.session.flush()
             db.session.add(User(customer_id=customer.id,email=email,name="Platform Administrator",role="platform_admin",password_hash=generate_password_hash(password),active=True))
             db.session.commit()
-        for code,name,price,devices,features in [("essential","Essential",299.0,1,["Email alarms","90-day history"]),("monitor","Monitor",599.0,1,["Tracking or tank dashboard","One-year history"]),("business","Business",999.0,3,["Multi-site","Universal signals","Reports and API"]),("industrial","Industrial",0.0,5,["PLC/OPC gateway","Managed onboarding"])]:
+        for code,name,price,devices,features in [("essential","Essential",299.0,1,["Email alarms","90-day history"]),("monitor","Monitor",599.0,1,["Tracking or tank dashboard","One-year history"]),("business","Business",999.0,3,["Multi-site","Universal signals"]),("industrial","Industrial",0.0,5,["PLC/OPC gateway","Managed onboarding"])]:
             if not SubscriptionPlan.query.filter_by(code=code).first(): db.session.add(SubscriptionPlan(code=code,name=name,monthly_price=price,included_devices=devices,features=features))
         db.session.commit()
         for customer in Customer.query.all():
             if not WorkspaceProfile.query.filter_by(customer_id=customer.id).first(): db.session.add(WorkspaceProfile(customer_id=customer.id))
             if not Subscription.query.filter_by(customer_id=customer.id).first():
-                plan=SubscriptionPlan.query.filter_by(code="monitor").first();started=datetime.now(timezone.utc);db.session.add(Subscription(customer_id=customer.id,plan_id=plan.id,state="TRIAL",trial_started_at=started,trial_ends_at=started+timedelta(days=30)))
+                plan=SubscriptionPlan.query.filter_by(code="monitor").first();start=datetime.now(timezone.utc);db.session.add(Subscription(customer_id=customer.id,plan_id=plan.id,state="TRIAL",trial_started_at=start,trial_ends_at=start+timedelta(days=30)))
         db.session.commit()
     return app

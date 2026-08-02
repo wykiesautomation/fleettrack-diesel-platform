@@ -70,7 +70,6 @@ class WorkspaceProfile(db.Model):
     customer_id=db.Column(db.Integer,db.ForeignKey('customer.id'),nullable=False,unique=True,index=True)
     contact_email=db.Column(db.String(180)); contact_phone=db.Column(db.String(50)); billing_email=db.Column(db.String(180)); address=db.Column(db.String(240))
     country=db.Column(db.String(80),default='South Africa'); terms_accepted_at=db.Column(db.DateTime(timezone=True)); updated_at=db.Column(db.DateTime(timezone=True),default=now,onupdate=now,nullable=False)
-    customer=db.relationship('Customer')
 
 class SubscriptionPlan(db.Model):
     id=db.Column(db.Integer,primary_key=True); code=db.Column(db.String(40),nullable=False,unique=True,index=True); name=db.Column(db.String(80),nullable=False)
@@ -90,16 +89,12 @@ class PaymentRecord(db.Model):
     amount_gross=db.Column(db.Float,nullable=False,default=0); currency=db.Column(db.String(8),default='ZAR',nullable=False); status=db.Column(db.String(30),default='PENDING',nullable=False,index=True)
     payment_method=db.Column(db.String(40)); raw_summary=db.Column(db.JSON,default=dict); paid_at=db.Column(db.DateTime(timezone=True)); created_at=db.Column(db.DateTime(timezone=True),default=now,nullable=False)
 
-class DeviceAuditEvent(db.Model):
-    id=db.Column(db.Integer,primary_key=True); customer_id=db.Column(db.Integer,nullable=False,index=True); device_id=db.Column(db.Integer,nullable=False,index=True); user_id=db.Column(db.Integer,index=True)
-    event_type=db.Column(db.String(50),nullable=False); detail=db.Column(db.String(240)); created_at=db.Column(db.DateTime(timezone=True),default=now,nullable=False)
-
 class PayFastEvent(db.Model):
-    id=db.Column(db.Integer,primary_key=True)
-    provider_reference=db.Column(db.String(180),index=True)
-    merchant_payment_id=db.Column(db.String(100),index=True)
-    event_hash=db.Column(db.String(64),nullable=False,unique=True,index=True)
-    source_ip=db.Column(db.String(64)); signature_valid=db.Column(db.Boolean,default=False,nullable=False)
-    source_valid=db.Column(db.Boolean,default=False,nullable=False); amount_valid=db.Column(db.Boolean,default=False,nullable=False)
-    server_valid=db.Column(db.Boolean,default=False,nullable=False); accepted=db.Column(db.Boolean,default=False,nullable=False)
+    id=db.Column(db.Integer,primary_key=True); provider_reference=db.Column(db.String(180),index=True); merchant_payment_id=db.Column(db.String(100),index=True)
+    event_hash=db.Column(db.String(64),nullable=False,unique=True,index=True); source_ip=db.Column(db.String(64)); signature_valid=db.Column(db.Boolean,default=False,nullable=False); source_valid=db.Column(db.Boolean,default=False,nullable=False)
+    amount_valid=db.Column(db.Boolean,default=False,nullable=False); server_valid=db.Column(db.Boolean,default=False,nullable=False); accepted=db.Column(db.Boolean,default=False,nullable=False)
     reason=db.Column(db.String(240)); payload_summary=db.Column(db.JSON,default=dict); created_at=db.Column(db.DateTime(timezone=True),default=now,nullable=False)
+
+class SubscriptionAuditEvent(db.Model):
+    id=db.Column(db.Integer,primary_key=True); customer_id=db.Column(db.Integer,nullable=False,index=True); subscription_id=db.Column(db.Integer,index=True); previous_state=db.Column(db.String(30)); new_state=db.Column(db.String(30),nullable=False)
+    reason=db.Column(db.String(240)); created_at=db.Column(db.DateTime(timezone=True),default=now,nullable=False)

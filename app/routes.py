@@ -5,8 +5,8 @@ from flask_login import login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import desc
 from . import db
-from .payfast import config as payfast_config, build_checkout, event_hash, valid_signature, valid_source, server_validate, forwarded_ip
-from .models import Customer,User,Site,Asset,Device,SignalDefinition,Reading,Alarm,Location,WorkspaceProfile,SubscriptionPlan,Subscription,PaymentRecord,DeviceAuditEvent,PayFastEvent
+from .payfast import config as payfast_config,build_checkout,event_hash,valid_signature,valid_source,server_validate,forwarded_ip
+from .models import Customer,User,Site,Asset,Device,SignalDefinition,Reading,Alarm,Location,WorkspaceProfile,SubscriptionPlan,Subscription,PaymentRecord,PayFastEvent,SubscriptionAuditEvent
 bp=Blueprint('main',__name__)
 
 def utcnow(): return datetime.now(timezone.utc)
@@ -41,8 +41,34 @@ def evaluate_alarm(sig,value):
     elif severity and existing: existing.severity=severity;existing.message=msg;existing.value=value
     elif existing: existing.state='CLOSED';existing.note=(existing.note or '')+' Auto-closed after return to normal.'
 
+ALLOWED_BILLING_ENDPOINTS={'main.public_home','main.login','main.logout','main.register','main.health','main.billing','main.plans','main.select_plan','main.billing_checkout','main.billing_success','main.billing_cancel','main.payfast_notify','static'}
+
+def set_subscription_state(sub,new_state,reason):
+    if sub.state!=new_state:
+        db.session.add(SubscriptionAuditEvent(customer_id=sub.customer_id,subscription_id=sub.id,previous_state=sub.state,new_state=new_state,reason=reason));sub.state=new_state;db.session.commit()
+
+def refresh_subscription(sub):
+    now=utcnow()
+    if sub.state=='TRIAL' and sub.trial_ends_at and now>aware(sub.trial_ends_at):set_subscription_state(sub,'SUSPENDED','Trial expired without successful payment')
+    elif sub.state=='ACTIVE' and sub.current_period_end and now>aware(sub.current_period_end):
+        sub.grace_ends_at=now+timedelta(days=3);set_subscription_state(sub,'GRACE_PERIOD','Paid period ended; three-day grace period started')
+    elif sub.state=='GRACE_PERIOD' and sub.grace_ends_at and now>aware(sub.grace_ends_at):set_subscription_state(sub,'SUSPENDED','Grace period expired')
+    return sub
+
+def entitlement_for(customer_id):
+    sub=Subscription.query.filter_by(customer_id=customer_id).first()
+    if not sub:return False,None
+    refresh_subscription(sub);return sub.state in ('TRIAL','ACTIVE','GRACE_PERIOD'),sub
+
+@bp.before_app_request
+def enforce_subscription_access():
+    if not current_user.is_authenticated:return None
+    if request.endpoint in ALLOWED_BILLING_ENDPOINTS or request.endpoint is None:return None
+    allowed,sub=entitlement_for(current_user.customer_id)
+    if not allowed:return redirect(url_for('main.subscription_required'))
+
 @bp.get('/health')
-def health(): return {'status':'ok','service':'assettrack360-rev16'}
+def health(): return {'status':'ok','service':'assettrack360-rev17'}
 
 @bp.route('/register',methods=['GET','POST'])
 def register():
@@ -54,10 +80,7 @@ def register():
         else:
             base=slugify(company) or 'customer'; slug=base; n=1
             while Customer.query.filter_by(slug=slug).first():n+=1;slug=f'{base}-{n}'
-            c=Customer(name=company,slug=slug);db.session.add(c);db.session.flush();u=User(customer_id=c.id,email=email,name=name,role='customer_admin',password_hash=generate_password_hash(password));db.session.add(u)
-            db.session.add(WorkspaceProfile(customer_id=c.id,contact_email=email,billing_email=email,terms_accepted_at=utcnow()))
-            selected=request.form.get('selected_plan','monitor');plan=SubscriptionPlan.query.filter_by(code=selected,active=True).first() or SubscriptionPlan.query.filter_by(code='monitor').first();db.session.add(Subscription(customer_id=c.id,plan_id=plan.id,state='TRIAL',trial_started_at=utcnow(),trial_ends_at=utcnow()+timedelta(days=30)))
-            db.session.commit();login_user(u);return redirect(url_for('main.onboarding'))
+            c=Customer(name=company,slug=slug);db.session.add(c);db.session.flush();u=User(customer_id=c.id,email=email,name=name,role='customer_admin',password_hash=generate_password_hash(password));db.session.add(u);db.session.commit();login_user(u);return redirect(url_for('main.onboarding'))
     return render_template('auth.html',mode='register')
 
 @bp.route('/login',methods=['GET','POST'])
@@ -179,10 +202,14 @@ def device(asset_id):
 def acknowledge_alarm(alarm_id):
     a=Alarm.query.filter_by(id=alarm_id,customer_id=tenant_id()).first_or_404();a.state='ACKNOWLEDGED';a.acknowledged_at=utcnow();a.acknowledged_by=current_user.id;a.note=request.form.get('note');db.session.commit();return redirect(request.referrer or url_for('main.dashboard'))
 
+@bp.get('/subscription-required')
+@login_required
+def subscription_required():
+    sub=Subscription.query.filter_by(customer_id=tenant_id()).first();return render_template('subscription_required.html',subscription=sub)
+
 @bp.get('/plans')
 @login_required
-def plans():
-    return render_template('plans.html',plans=SubscriptionPlan.query.filter_by(active=True).order_by(SubscriptionPlan.monthly_price).all(),subscription=Subscription.query.filter_by(customer_id=tenant_id()).first())
+def plans():return render_template('plans.html',plans=SubscriptionPlan.query.filter_by(active=True).order_by(SubscriptionPlan.monthly_price).all(),subscription=Subscription.query.filter_by(customer_id=tenant_id()).first())
 
 @bp.post('/plans/<int:plan_id>/select')
 @login_required
@@ -192,49 +219,45 @@ def select_plan(plan_id):
 @bp.get('/billing')
 @login_required
 def billing():
-    sub=Subscription.query.filter_by(customer_id=tenant_id()).first_or_404();payments=PaymentRecord.query.filter_by(customer_id=tenant_id()).order_by(desc(PaymentRecord.created_at)).limit(30).all();days=max(0,(aware(sub.trial_ends_at)-utcnow()).days) if sub.trial_ends_at and sub.state=='TRIAL' else None
+    sub=Subscription.query.filter_by(customer_id=tenant_id()).first_or_404();refresh_subscription(sub);payments=PaymentRecord.query.filter_by(customer_id=tenant_id()).order_by(desc(PaymentRecord.created_at)).limit(30).all();days=max(0,(aware(sub.trial_ends_at)-utcnow()).days) if sub.trial_ends_at and sub.state=='TRIAL' else None
     return render_template('billing.html',subscription=sub,payments=payments,active_devices=Device.query.filter_by(customer_id=tenant_id(),active=True).count(),days_left=days,payfast_mode=payfast_config()['mode'])
 
 @bp.post('/billing/checkout')
 @login_required
 def billing_checkout():
     cfg=payfast_config();sub=Subscription.query.filter_by(customer_id=tenant_id()).first_or_404()
-    if not cfg['merchant_id'] or not cfg['merchant_key']:flash('PayFast environment variables are not configured.','error');return redirect(url_for('main.billing'))
-    amount=float(sub.plan.monthly_price)
-    if amount<=0:flash('Industrial plan requires a custom quotation.','error');return redirect(url_for('main.billing'))
-    reference=f'AT360-{tenant_id()}-{sub.id}-{secrets.token_hex(6).upper()}'
-    payment=PaymentRecord(customer_id=tenant_id(),subscription_id=sub.id,merchant_payment_id=reference,amount_gross=amount,status='PENDING',raw_summary={'mode':cfg['mode'],'plan':sub.plan.code});db.session.add(payment);db.session.commit()
-    endpoint,fields=build_checkout(sub,payment,current_user,cfg);return render_template('payfast_redirect.html',endpoint=endpoint,fields=fields,payment=payment)
+    if not cfg['merchant_id'] or not cfg['merchant_key']:flash('PayFast is not configured.','error');return redirect(url_for('main.billing'))
+    if sub.plan.monthly_price<=0:flash('Industrial plan requires a quote.','error');return redirect(url_for('main.billing'))
+    ref=f'AT360-{tenant_id()}-{sub.id}-{secrets.token_hex(6).upper()}';payment=PaymentRecord(customer_id=tenant_id(),subscription_id=sub.id,merchant_payment_id=ref,amount_gross=sub.plan.monthly_price,status='PENDING');db.session.add(payment);db.session.commit();endpoint,fields=build_checkout(sub,payment,current_user,cfg);return render_template('payfast_redirect.html',endpoint=endpoint,fields=fields,payment=payment)
 
 @bp.get('/billing/success')
 @login_required
-def billing_success(): return render_template('payment_result.html',result='success')
-
+def billing_success():return render_template('payment_result.html',result='success')
 @bp.get('/billing/cancel')
 @login_required
-def billing_cancel(): return render_template('payment_result.html',result='cancel')
+def billing_cancel():return render_template('payment_result.html',result='cancel')
 
 @bp.post('/payfast/notify')
 def payfast_notify():
     cfg=payfast_config();form=request.form;digest=event_hash(form)
     if PayFastEvent.query.filter_by(event_hash=digest).first():return 'OK',200
-    merchant_id=form.get('merchant_id','');reference=form.get('m_payment_id','');pf_ref=form.get('pf_payment_id');payment=PaymentRecord.query.filter_by(merchant_payment_id=reference).first()
-    sig_ok=valid_signature(form,cfg);source_ok=valid_source(request,cfg);server_ok=server_validate(form,cfg)
-    amount=float(form.get('amount_gross') or 0);amount_ok=bool(payment and abs(amount-payment.amount_gross)<=0.01);merchant_ok=(merchant_id==cfg['merchant_id']);status_ok=(form.get('payment_status')=='COMPLETE')
-    accepted=all([payment,sig_ok,source_ok,server_ok,amount_ok,merchant_ok,status_ok]);reason='accepted' if accepted else ','.join(name for name,ok in [('payment',bool(payment)),('signature',sig_ok),('source',source_ok),('server',server_ok),('amount',amount_ok),('merchant',merchant_ok),('status',status_ok)] if not ok)
-    event=PayFastEvent(provider_reference=pf_ref,merchant_payment_id=reference,event_hash=digest,source_ip=forwarded_ip(request),signature_valid=sig_ok,source_valid=source_ok,amount_valid=amount_ok,server_valid=server_ok,accepted=accepted,reason=reason,payload_summary={'payment_status':form.get('payment_status'),'amount_gross':form.get('amount_gross'),'mode':cfg['mode']});db.session.add(event)
+    ref=form.get('m_payment_id','');payment=PaymentRecord.query.filter_by(merchant_payment_id=ref).first();sig=valid_signature(form,cfg);source=valid_source(request,cfg);server=server_validate(form,cfg);amount=float(form.get('amount_gross') or 0);amount_ok=bool(payment and abs(amount-payment.amount_gross)<=.01);merchant=form.get('merchant_id')==cfg['merchant_id'];complete=form.get('payment_status')=='COMPLETE';accepted=all([payment,sig,source,server,amount_ok,merchant,complete])
+    db.session.add(PayFastEvent(provider_reference=form.get('pf_payment_id'),merchant_payment_id=ref,event_hash=digest,source_ip=forwarded_ip(request),signature_valid=sig,source_valid=source,server_valid=server,amount_valid=amount_ok,accepted=accepted,reason='accepted' if accepted else 'validation_failed'))
     if payment:
-        payment.provider_reference=pf_ref or payment.provider_reference;payment.payment_method=form.get('payment_method');payment.raw_summary={'payment_status':form.get('payment_status'),'token_present':bool(form.get('token'))}
+        payment.provider_reference=form.get('pf_payment_id') or payment.provider_reference
         if accepted:
-            payment.status='COMPLETE';payment.paid_at=utcnow();sub=Subscription.query.filter_by(id=payment.subscription_id).first();sub.state='ACTIVE';sub.current_period_start=utcnow();sub.current_period_end=utcnow()+timedelta(days=30);sub.next_payment_at=sub.current_period_end;sub.grace_ends_at=None
-            if form.get('token'):sub.payfast_subscription_token=form.get('token')
-        elif form.get('payment_status') in ('FAILED','CANCELLED'):payment.status=form.get('payment_status')
+            payment.status='COMPLETE';payment.paid_at=utcnow();sub=Subscription.query.filter_by(id=payment.subscription_id).first();old=sub.state;sub.state='ACTIVE';sub.current_period_start=utcnow();sub.current_period_end=utcnow()+timedelta(days=30);sub.next_payment_at=sub.current_period_end;sub.grace_ends_at=None;sub.payfast_subscription_token=form.get('token') or sub.payfast_subscription_token;db.session.add(SubscriptionAuditEvent(customer_id=sub.customer_id,subscription_id=sub.id,previous_state=old,new_state='ACTIVE',reason='Validated PayFast COMPLETE ITN'))
+        elif form.get('payment_status') in ('FAILED','CANCELLED'):
+            payment.status=form.get('payment_status');sub=Subscription.query.filter_by(id=payment.subscription_id).first()
+            if sub.state=='ACTIVE':sub.grace_ends_at=utcnow()+timedelta(days=3);set_subscription_state(sub,'GRACE_PERIOD','PayFast payment failed')
     db.session.commit();return ('OK',200) if accepted else ('INVALID',400)
 
 @bp.post('/api/v1/ingest')
 def ingest():
     token=request.headers.get('Authorization','').removeprefix('Bearer ').strip();device=Device.query.filter_by(api_token=token,active=True).first()
     if not device:return jsonify(error='unauthorized'),401
+    allowed,subscription=entitlement_for(device.customer_id)
+    if not allowed:return jsonify(error='subscription_inactive',state=subscription.state if subscription else 'MISSING',billing_url='/billing'),402
     payload=request.get_json(silent=True) or {}
     if payload.get('device_id') and payload['device_id']!=device.device_uid:return jsonify(error='device_id mismatch'),403
     sampled=parse_time(payload.get('timestamp'));sequence=str(payload.get('sequence',''))
