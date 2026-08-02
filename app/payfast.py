@@ -1,7 +1,7 @@
 import hashlib
 import os
 import socket
-from urllib.parse import quote_plus, urlencode
+from urllib.parse import quote_plus, unquote_plus, urlencode
 from urllib.request import Request, urlopen
 
 SANDBOX_PROCESS = 'https://sandbox.payfast.co.za/eng/process'
@@ -90,19 +90,58 @@ def event_hash(form):
     return hashlib.sha256(urlencode(canonical).encode('utf-8')).hexdigest()
 
 
-def valid_signature(form, cfg):
+def _raw_itn_signature(raw_body, passphrase):
+    """Rebuild the ITN signature from the exact encoded POST body order."""
+    if not raw_body:
+        return ''
+    parts = []
+    for segment in raw_body.split('&'):
+        if not segment:
+            continue
+        encoded_key, separator, encoded_value = segment.partition('=')
+        if unquote_plus(encoded_key) == 'signature':
+            continue
+        if not separator or encoded_value == '':
+            continue
+        parts.append(segment)
+    text = '&'.join(parts)
+    if passphrase:
+        text += '&passphrase=' + quote_plus(passphrase.strip(), safe='')
+    return hashlib.md5(text.encode('utf-8')).hexdigest()
+
+
+def valid_signature(form, cfg, raw_body=''):
     supplied = form.get('signature', '').strip().lower()
     if not supplied:
         return False
-
+    raw_candidate = _raw_itn_signature(raw_body, cfg['passphrase'])
     received = signature(list(form.items()), cfg['passphrase'])
     canonical_pairs = sorted(
         ((str(key), str(value)) for key, value in form.items() if key != 'signature'),
         key=lambda pair: pair[0],
     )
     canonical = signature(canonical_pairs, cfg['passphrase'])
-    return supplied in {received, canonical}
+    return supplied in {raw_candidate, received, canonical}
 
+
+def signature_diagnostics(form, cfg, raw_body=''):
+    """Return non-sensitive match flags only."""
+    supplied = form.get('signature', '').strip().lower()
+    raw_candidate = _raw_itn_signature(raw_body, cfg['passphrase'])
+    received = signature(list(form.items()), cfg['passphrase'])
+    canonical_pairs = sorted(
+        ((str(key), str(value)) for key, value in form.items() if key != 'signature'),
+        key=lambda pair: pair[0],
+    )
+    canonical = signature(canonical_pairs, cfg['passphrase'])
+    return {
+        'raw_body_present': bool(raw_body),
+        'field_count': len(form),
+        'passphrase_present': bool(cfg['passphrase']),
+        'raw_match': bool(supplied and supplied == raw_candidate),
+        'received_match': bool(supplied and supplied == received),
+        'canonical_match': bool(supplied and supplied == canonical),
+    }
 
 def forwarded_ip(req):
     value = (
