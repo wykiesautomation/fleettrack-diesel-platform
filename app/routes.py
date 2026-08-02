@@ -1,13 +1,12 @@
 import secrets, re
 from datetime import datetime, timezone, timedelta
-from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify, abort, session, current_app
+from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify, abort, session
 from flask_login import login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import desc
 from . import db
 from .payfast import config as payfast_config,build_checkout,event_hash,valid_signature,valid_source,server_validate,forwarded_ip
-from .production import checks as production_checks, checkout_allowed
-from .models import Customer,User,Site,Asset,Device,SignalDefinition,Reading,Alarm,Location,WorkspaceProfile,SubscriptionPlan,Subscription,PaymentRecord,PayFastEvent,SubscriptionAuditEvent,ProductionGateEvent
+from .models import Customer,User,Site,Asset,Device,SignalDefinition,Reading,Alarm,Location,WorkspaceProfile,SubscriptionPlan,Subscription,PaymentRecord,PayFastEvent,SubscriptionAuditEvent
 bp=Blueprint('main',__name__)
 
 def utcnow(): return datetime.now(timezone.utc)
@@ -42,7 +41,7 @@ def evaluate_alarm(sig,value):
     elif severity and existing: existing.severity=severity;existing.message=msg;existing.value=value
     elif existing: existing.state='CLOSED';existing.note=(existing.note or '')+' Auto-closed after return to normal.'
 
-ALLOWED_BILLING_ENDPOINTS={'main.public_home','main.login','main.logout','main.register','main.health','main.billing','main.plans','main.select_plan','main.billing_checkout','main.billing_success','main.billing_cancel','main.payfast_notify','main.terms','main.privacy','main.payment_policy','main.readiness','main.production_status','static'}
+ALLOWED_BILLING_ENDPOINTS={'main.public_home','main.login','main.logout','main.register','main.health','main.billing','main.plans','main.select_plan','main.billing_checkout','main.billing_success','main.billing_cancel','main.payfast_notify','static'}
 
 def set_subscription_state(sub,new_state,reason):
     if sub.state!=new_state:
@@ -69,25 +68,7 @@ def enforce_subscription_access():
     if not allowed:return redirect(url_for('main.subscription_required'))
 
 @bp.get('/health')
-def health(): return {'status':'ok','service':'assettrack360-rev18'}
-
-@bp.get('/ready')
-def readiness():
-    report=production_checks(current_app)
-    return jsonify(report),200 if report['ready'] else 503
-
-@bp.get('/production-status')
-@login_required
-def production_status():
-    if current_user.role!='platform_admin':abort(403)
-    return render_template('production_status.html',report=production_checks(current_app))
-
-@bp.get('/terms')
-def terms(): return render_template('legal.html',doc='terms')
-@bp.get('/privacy')
-def privacy(): return render_template('legal.html',doc='privacy')
-@bp.get('/payment-policy')
-def payment_policy(): return render_template('legal.html',doc='payment')
+def health(): return {'status':'ok','service':'assettrack360-rev17'}
 
 @bp.route('/register',methods=['GET','POST'])
 def register():
@@ -102,22 +83,12 @@ def register():
             c=Customer(name=company,slug=slug);db.session.add(c);db.session.flush();u=User(customer_id=c.id,email=email,name=name,role='customer_admin',password_hash=generate_password_hash(password));db.session.add(u);db.session.commit();login_user(u);return redirect(url_for('main.onboarding'))
     return render_template('auth.html',mode='register')
 
-LOGIN_ATTEMPTS={}
-
-def login_rate_limited(ip):
-    now=utcnow();entries=[t for t in LOGIN_ATTEMPTS.get(ip,[]) if (now-t).total_seconds()<900];LOGIN_ATTEMPTS[ip]=entries
-    return len(entries)>=8
-
-def record_login_failure(ip): LOGIN_ATTEMPTS.setdefault(ip,[]).append(utcnow())
-
 @bp.route('/login',methods=['GET','POST'])
 def login():
-    ip=request.headers.get('CF-Connecting-IP') or request.remote_addr or 'unknown'
     if request.method=='POST':
-        if login_rate_limited(ip): flash('Too many failed attempts. Try again in 15 minutes.','error');return render_template('auth.html',mode='login'),429
         u=User.query.filter_by(email=request.form.get('email','').strip().lower()).first()
         if u and u.active and check_password_hash(u.password_hash,request.form.get('password','')):login_user(u);return redirect(url_for('main.dashboard'))
-        record_login_failure(ip);flash('Invalid login.','error')
+        flash('Invalid login.','error')
     return render_template('auth.html',mode='login')
 @bp.get('/logout')
 @login_required
@@ -255,10 +226,7 @@ def billing():
 @login_required
 def billing_checkout():
     cfg=payfast_config();sub=Subscription.query.filter_by(customer_id=tenant_id()).first_or_404()
-    gate_ok,gate_report=checkout_allowed(current_app)
-    if not gate_ok:
-        flash('Production checkout is blocked because the final gate is incomplete.','error');return redirect(url_for('main.billing'))
-    if not cfg['merchant_id'] or not cfg['merchant_key'] or not cfg['passphrase']:flash('PayFast is not configured.','error');return redirect(url_for('main.billing'))
+    if not cfg['merchant_id'] or not cfg['merchant_key']:flash('PayFast is not configured.','error');return redirect(url_for('main.billing'))
     if sub.plan.monthly_price<=0:flash('Industrial plan requires a quote.','error');return redirect(url_for('main.billing'))
     ref=f'AT360-{tenant_id()}-{sub.id}-{secrets.token_hex(6).upper()}';payment=PaymentRecord(customer_id=tenant_id(),subscription_id=sub.id,merchant_payment_id=ref,amount_gross=sub.plan.monthly_price,status='PENDING');db.session.add(payment);db.session.commit();endpoint,fields=build_checkout(sub,payment,current_user,cfg);return render_template('payfast_redirect.html',endpoint=endpoint,fields=fields,payment=payment)
 
@@ -271,18 +239,93 @@ def billing_cancel():return render_template('payment_result.html',result='cancel
 
 @bp.post('/payfast/notify')
 def payfast_notify():
-    cfg=payfast_config();form=request.form;digest=event_hash(form)
-    if PayFastEvent.query.filter_by(event_hash=digest).first():return 'OK',200
-    ref=form.get('m_payment_id','');payment=PaymentRecord.query.filter_by(merchant_payment_id=ref).first();sig=valid_signature(form,cfg);source=valid_source(request,cfg);server=server_validate(form,cfg);amount=float(form.get('amount_gross') or 0);amount_ok=bool(payment and abs(amount-payment.amount_gross)<=.01);merchant=form.get('merchant_id')==cfg['merchant_id'];complete=form.get('payment_status')=='COMPLETE';accepted=all([payment,sig,source,server,amount_ok,merchant,complete])
-    db.session.add(PayFastEvent(provider_reference=form.get('pf_payment_id'),merchant_payment_id=ref,event_hash=digest,source_ip=forwarded_ip(request),signature_valid=sig,source_valid=source,server_valid=server,amount_valid=amount_ok,accepted=accepted,reason='accepted' if accepted else 'validation_failed'))
+    cfg = payfast_config()
+    form = request.form
+    digest = event_hash(form)
+    existing = PayFastEvent.query.filter_by(event_hash=digest).first()
+    if existing and existing.accepted:
+        current_app.logger.info("PayFast ITN duplicate accepted event=%s", existing.id)
+        return 'OK', 200
+    if existing and not existing.accepted:
+        # Allow a previously rejected event to be revalidated after a configuration fix.
+        db.session.delete(existing)
+        db.session.flush()
+
+    reference = form.get('m_payment_id', '')
+    payment = PaymentRecord.query.filter_by(merchant_payment_id=reference).first()
+    signature_ok = valid_signature(form, cfg)
+    source_ok = valid_source(request, cfg)
+    server_ok = server_validate(form, cfg)
+    try:
+        amount = float(form.get('amount_gross') or 0)
+    except (TypeError, ValueError):
+        amount = 0.0
+    amount_ok = bool(payment and abs(amount - payment.amount_gross) <= 0.01)
+    merchant_ok = form.get('merchant_id') == cfg['merchant_id']
+    complete_ok = form.get('payment_status') == 'COMPLETE'
+    payment_ok = bool(payment)
+    accepted = all([
+        payment_ok, signature_ok, source_ok, server_ok,
+        amount_ok, merchant_ok, complete_ok,
+    ])
+    failures = [
+        name for name, ok in (
+            ('payment', payment_ok),
+            ('signature', signature_ok),
+            ('source', source_ok),
+            ('server', server_ok),
+            ('amount', amount_ok),
+            ('merchant', merchant_ok),
+            ('status', complete_ok),
+        ) if not ok
+    ]
+    reason = 'accepted' if accepted else 'failed:' + ','.join(failures)
+    current_app.logger.warning(
+        "PayFast ITN validation ref=%s accepted=%s payment=%s signature=%s source=%s server=%s amount=%s merchant=%s status=%s",
+        reference, accepted, payment_ok, signature_ok, source_ok,
+        server_ok, amount_ok, merchant_ok, complete_ok,
+    )
+    db.session.add(PayFastEvent(
+        provider_reference=form.get('pf_payment_id'),
+        merchant_payment_id=reference,
+        event_hash=digest,
+        source_ip=forwarded_ip(request),
+        signature_valid=signature_ok,
+        source_valid=source_ok,
+        server_valid=server_ok,
+        amount_valid=amount_ok,
+        accepted=accepted,
+        reason=reason,
+        payload_summary={
+            'payment_status': form.get('payment_status'),
+            'amount_gross': form.get('amount_gross'),
+            'mode': cfg['mode'],
+        },
+    ))
     if payment:
-        payment.provider_reference=form.get('pf_payment_id') or payment.provider_reference
+        payment.provider_reference = form.get('pf_payment_id') or payment.provider_reference
         if accepted:
-            payment.status='COMPLETE';payment.paid_at=utcnow();sub=Subscription.query.filter_by(id=payment.subscription_id).first();old=sub.state;sub.state='ACTIVE';sub.current_period_start=utcnow();sub.current_period_end=utcnow()+timedelta(days=30);sub.next_payment_at=sub.current_period_end;sub.grace_ends_at=None;sub.payfast_subscription_token=form.get('token') or sub.payfast_subscription_token;db.session.add(SubscriptionAuditEvent(customer_id=sub.customer_id,subscription_id=sub.id,previous_state=old,new_state='ACTIVE',reason='Validated PayFast COMPLETE ITN'))
-        elif form.get('payment_status') in ('FAILED','CANCELLED'):
-            payment.status=form.get('payment_status');sub=Subscription.query.filter_by(id=payment.subscription_id).first()
-            if sub.state=='ACTIVE':sub.grace_ends_at=utcnow()+timedelta(days=3);set_subscription_state(sub,'GRACE_PERIOD','PayFast payment failed')
-    db.session.commit();return ('OK',200) if accepted else ('INVALID',400)
+            payment.status = 'COMPLETE'
+            payment.paid_at = utcnow()
+            sub = Subscription.query.filter_by(id=payment.subscription_id).first()
+            old = sub.state
+            sub.state = 'ACTIVE'
+            sub.current_period_start = utcnow()
+            sub.current_period_end = utcnow() + timedelta(days=30)
+            sub.next_payment_at = sub.current_period_end
+            sub.grace_ends_at = None
+            sub.payfast_subscription_token = form.get('token') or sub.payfast_subscription_token
+            db.session.add(SubscriptionAuditEvent(
+                customer_id=sub.customer_id,
+                subscription_id=sub.id,
+                previous_state=old,
+                new_state='ACTIVE',
+                reason='Validated PayFast COMPLETE ITN',
+            ))
+        elif form.get('payment_status') in ('FAILED', 'CANCELLED'):
+            payment.status = form.get('payment_status')
+    db.session.commit()
+    return ('OK', 200) if accepted else ('INVALID', 400)
 
 @bp.post('/api/v1/ingest')
 def ingest():
