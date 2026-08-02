@@ -1,11 +1,11 @@
 import secrets, re
 from datetime import datetime, timezone, timedelta
-from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify, abort
+from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify, abort, session
 from flask_login import login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import desc
 from . import db
-from .models import Customer,User,Site,Asset,Device,SignalDefinition,Reading,Alarm,Location
+from .models import Customer,User,Site,Asset,Device,SignalDefinition,Reading,Alarm,Location,WorkspaceProfile,SubscriptionPlan,Subscription,PaymentRecord,DeviceAuditEvent
 bp=Blueprint('main',__name__)
 
 def utcnow(): return datetime.now(timezone.utc)
@@ -41,7 +41,7 @@ def evaluate_alarm(sig,value):
     elif existing: existing.state='CLOSED';existing.note=(existing.note or '')+' Auto-closed after return to normal.'
 
 @bp.get('/health')
-def health(): return {'status':'ok','service':'assettrack360-rev15c'}
+def health(): return {'status':'ok','service':'assettrack360-rev15d'}
 
 @bp.route('/register',methods=['GET','POST'])
 def register():
@@ -53,7 +53,12 @@ def register():
         else:
             base=slugify(company) or 'customer'; slug=base; n=1
             while Customer.query.filter_by(slug=slug).first():n+=1;slug=f'{base}-{n}'
-            c=Customer(name=company,slug=slug);db.session.add(c);db.session.flush();u=User(customer_id=c.id,email=email,name=name,role='customer_admin',password_hash=generate_password_hash(password));db.session.add(u);db.session.commit();login_user(u);return redirect(url_for('main.onboarding'))
+            c=Customer(name=company,slug=slug);db.session.add(c);db.session.flush()
+            u=User(customer_id=c.id,email=email,name=name,role='customer_admin',password_hash=generate_password_hash(password));db.session.add(u)
+            db.session.add(WorkspaceProfile(customer_id=c.id,contact_email=email,billing_email=email,terms_accepted_at=utcnow()))
+            selected=request.form.get('selected_plan','monitor');plan=SubscriptionPlan.query.filter_by(code=selected,active=True).first() or SubscriptionPlan.query.filter_by(code='monitor').first()
+            db.session.add(Subscription(customer_id=c.id,plan_id=plan.id,state='TRIAL',trial_started_at=utcnow(),trial_ends_at=utcnow()+timedelta(days=30)))
+            db.session.commit();login_user(u);return redirect(url_for('main.onboarding'))
     return render_template('auth.html',mode='register')
 
 @bp.route('/login',methods=['GET','POST'])
@@ -174,6 +179,76 @@ def device(asset_id):
 @login_required
 def acknowledge_alarm(alarm_id):
     a=Alarm.query.filter_by(id=alarm_id,customer_id=tenant_id()).first_or_404();a.state='ACKNOWLEDGED';a.acknowledged_at=utcnow();a.acknowledged_by=current_user.id;a.note=request.form.get('note');db.session.commit();return redirect(request.referrer or url_for('main.dashboard'))
+
+@bp.route('/account',methods=['GET','POST'])
+@login_required
+def account():
+    customer=Customer.query.filter_by(id=tenant_id()).first_or_404()
+    profile=WorkspaceProfile.query.filter_by(customer_id=tenant_id()).first()
+    if not profile:
+        profile=WorkspaceProfile(customer_id=tenant_id());db.session.add(profile);db.session.commit()
+    if request.method=='POST':
+        customer.name=request.form.get('company_name',customer.name).strip() or customer.name
+        current_user.name=request.form.get('user_name',current_user.name).strip() or current_user.name
+        profile.contact_email=request.form.get('contact_email','').strip().lower()
+        profile.contact_phone=request.form.get('contact_phone','').strip()
+        profile.billing_email=request.form.get('billing_email','').strip().lower()
+        profile.address=request.form.get('address','').strip()
+        db.session.commit();flash('Account settings updated.','ok');return redirect(url_for('main.account'))
+    users=User.query.filter_by(customer_id=tenant_id()).order_by(User.name).all()
+    return render_template('account.html',customer=customer,profile=profile,users=users)
+
+@bp.get('/devices')
+@login_required
+def devices():
+    records=Device.query.filter_by(customer_id=tenant_id()).order_by(Device.device_uid).all()
+    now=utcnow();items=[]
+    for record in records:
+        online=bool(record.active and record.last_seen and now-aware(record.last_seen)<=timedelta(minutes=30))
+        items.append({'device':record,'online':online,'last_contact':aware(record.last_seen).strftime('%Y-%m-%d %H:%M UTC') if record.last_seen else 'Never','asset':record.asset})
+    return render_template('devices.html',items=items)
+
+@bp.post('/devices/<int:device_id>/rotate-token')
+@login_required
+def rotate_device_token(device_id):
+    record=Device.query.filter_by(id=device_id,customer_id=tenant_id()).first_or_404()
+    token=secrets.token_urlsafe(32);record.api_token=token
+    db.session.add(DeviceAuditEvent(customer_id=tenant_id(),device_id=record.id,user_id=current_user.id,event_type='TOKEN_ROTATED',detail='API token rotated by customer administrator'))
+    db.session.commit();session['new_device_token']=token;session['new_device_id']=record.id;flash('Device token rotated. Copy the new token now.','ok');return redirect(url_for('main.devices'))
+
+@bp.post('/devices/<int:device_id>/toggle')
+@login_required
+def toggle_device(device_id):
+    record=Device.query.filter_by(id=device_id,customer_id=tenant_id()).first_or_404();record.active=not record.active
+    event='DEVICE_ENABLED' if record.active else 'DEVICE_DISABLED';db.session.add(DeviceAuditEvent(customer_id=tenant_id(),device_id=record.id,user_id=current_user.id,event_type=event,detail=event.replace('_',' ').title()))
+    db.session.commit();flash('Device status updated.','ok');return redirect(url_for('main.devices'))
+
+@bp.get('/plans')
+@login_required
+def plans():
+    subscription=Subscription.query.filter_by(customer_id=tenant_id()).first();plans=SubscriptionPlan.query.filter_by(active=True).order_by(SubscriptionPlan.monthly_price).all()
+    return render_template('plans.html',plans=plans,subscription=subscription)
+
+@bp.post('/plans/<int:plan_id>/select')
+@login_required
+def select_plan(plan_id):
+    plan=SubscriptionPlan.query.filter_by(id=plan_id,active=True).first_or_404();subscription=Subscription.query.filter_by(customer_id=tenant_id()).first_or_404();subscription.plan_id=plan.id
+    db.session.commit();flash('Plan selection updated. PayFast checkout will be enabled in REV16.','ok');return redirect(url_for('main.billing'))
+
+@bp.get('/billing')
+@login_required
+def billing():
+    subscription=Subscription.query.filter_by(customer_id=tenant_id()).first()
+    if not subscription:
+        plan=SubscriptionPlan.query.filter_by(code='monitor').first();subscription=Subscription(customer_id=tenant_id(),plan_id=plan.id,state='TRIAL',trial_started_at=utcnow(),trial_ends_at=utcnow()+timedelta(days=30));db.session.add(subscription);db.session.commit()
+    payments=PaymentRecord.query.filter_by(customer_id=tenant_id()).order_by(desc(PaymentRecord.created_at)).limit(30).all()
+    active_devices=Device.query.filter_by(customer_id=tenant_id(),active=True).count();days_left=max(0,(aware(subscription.trial_ends_at)-utcnow()).days) if subscription.trial_ends_at and subscription.state=='TRIAL' else None
+    return render_template('billing.html',subscription=subscription,payments=payments,active_devices=active_devices,days_left=days_left)
+
+@bp.get('/billing/checkout')
+@login_required
+def billing_checkout():
+    flash('PayFast sandbox checkout is the next build. Billing foundation is ready.','ok');return redirect(url_for('main.billing'))
 
 @bp.post('/api/v1/ingest')
 def ingest():

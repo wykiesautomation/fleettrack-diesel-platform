@@ -1,5 +1,5 @@
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from flask import Flask
 from flask_login import LoginManager
 from flask_sqlalchemy import SQLAlchemy
@@ -29,7 +29,7 @@ def create_app(test_config=None):
     if test_config:
         app.config.update(test_config)
     db.init_app(app); login_manager.init_app(app)
-    from .models import User, Customer
+    from .models import User, Customer, SubscriptionPlan, Subscription, WorkspaceProfile
     @login_manager.user_loader
     def load_user(user_id): return db.session.get(User, int(user_id))
     from .routes import bp
@@ -43,4 +43,22 @@ def create_app(test_config=None):
             db.session.add(customer); db.session.flush()
             db.session.add(User(customer_id=customer.id,email=email,name="Platform Administrator",role="platform_admin",password_hash=generate_password_hash(password),active=True))
             db.session.commit()
+        plan_specs = [
+            ("essential","Essential",299.0,1,["Email alarms","90-day history","Basic monitoring"]),
+            ("monitor","Monitor",599.0,1,["Tracking or tank dashboard","SMS/email alerts","One-year history"]),
+            ("business","Business",999.0,3,["Multi-site operations","Universal signals","Reports and API"]),
+            ("industrial","Industrial",0.0,5,["PLC/OPC gateway","Managed onboarding","Priority support"]),
+        ]
+        for code,name,price,devices,features in plan_specs:
+            if not SubscriptionPlan.query.filter_by(code=code).first():
+                db.session.add(SubscriptionPlan(code=code,name=name,monthly_price=price,included_devices=devices,features=features))
+        db.session.commit()
+        for customer in Customer.query.all():
+            if not WorkspaceProfile.query.filter_by(customer_id=customer.id).first():
+                db.session.add(WorkspaceProfile(customer_id=customer.id))
+            if not Subscription.query.filter_by(customer_id=customer.id).first():
+                plan=SubscriptionPlan.query.filter_by(code="monitor").first()
+                started=datetime.now(timezone.utc)
+                db.session.add(Subscription(customer_id=customer.id,plan_id=plan.id,state="TRIAL",trial_started_at=started,trial_ends_at=started+timedelta(days=30)))
+        db.session.commit()
     return app
