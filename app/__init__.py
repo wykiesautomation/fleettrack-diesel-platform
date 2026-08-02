@@ -1,10 +1,9 @@
 import os
 from datetime import datetime, timezone, timedelta
-from flask import Flask, request
+from flask import Flask, request, jsonify
 from flask_login import LoginManager
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash
-from werkzeug.middleware.proxy_fix import ProxyFix
 
 db = SQLAlchemy()
 login_manager = LoginManager()
@@ -13,36 +12,49 @@ login_manager.login_view = "main.login"
 
 def create_app(test_config=None):
     app = Flask(__name__)
-    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
     db_url = os.getenv("DATABASE_URL", "sqlite:///assettrack360.db")
     if db_url.startswith("postgres://"):
         db_url = db_url.replace("postgres://", "postgresql+psycopg://", 1)
     elif db_url.startswith("postgresql://"):
         db_url = db_url.replace("postgresql://", "postgresql+psycopg://", 1)
+    engine_options = {}
+    if db_url.startswith("postgresql+psycopg://"):
+        engine_options = {
+            "pool_pre_ping": True,
+            "pool_recycle": 300,
+            "pool_timeout": 30,
+            "pool_size": 5,
+            "max_overflow": 5,
+        }
     app.config.update(
         SECRET_KEY=os.getenv("SECRET_KEY", "dev-only-change-me"),
         SQLALCHEMY_DATABASE_URI=db_url,
         SQLALCHEMY_TRACK_MODIFICATIONS=False,
+        SQLALCHEMY_ENGINE_OPTIONS=engine_options,
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Lax",
         SESSION_COOKIE_SECURE=os.getenv("COOKIE_SECURE", "false").lower()=="true",
         MAX_CONTENT_LENGTH=1024*1024,
-        PERMANENT_SESSION_LIFETIME=timedelta(hours=12),
     )
     if test_config:
         app.config.update(test_config)
     db.init_app(app); login_manager.init_app(app)
-    @app.after_request
-    def security_headers(response):
-        response.headers.setdefault('X-Content-Type-Options','nosniff')
-        response.headers.setdefault('X-Frame-Options','DENY')
-        response.headers.setdefault('Referrer-Policy','strict-origin-when-cross-origin')
-        response.headers.setdefault('Permissions-Policy','camera=(), microphone=(), geolocation=(self)')
-        response.headers.setdefault('Content-Security-Policy',"default-src 'self'; style-src 'self' 'unsafe-inline' https://unpkg.com; script-src 'self' 'unsafe-inline' https://unpkg.com; img-src 'self' data: https://*.tile.openstreetmap.org; connect-src 'self'; font-src 'self'; frame-ancestors 'none'; form-action 'self' https://sandbox.payfast.co.za https://www.payfast.co.za")
-        if request.is_secure: response.headers.setdefault('Strict-Transport-Security','max-age=31536000; includeSubDomains')
-        if request.path.startswith(('/billing','/account','/devices','/production')): response.headers.setdefault('Cache-Control','no-store')
-        return response
-    from .models import User, Customer, SubscriptionPlan, Subscription, WorkspaceProfile, ProductionGateEvent
+
+    @app.errorhandler(OperationalError)
+    def handle_database_disconnect(error):
+        db.session.rollback()
+        app.logger.warning("Temporary database connection failure: %s", type(error).__name__)
+        if request.path.startswith("/api/"):
+            return jsonify(
+                error="database_temporarily_unavailable",
+                retry_after_seconds=5,
+            ), 503
+        return (
+            "Database connection is recovering. Please wait five seconds and refresh.",
+            503,
+            {"Retry-After": "5", "Content-Type": "text/plain; charset=utf-8"},
+        )
+    from .models import User, Customer, SubscriptionPlan, Subscription, WorkspaceProfile
     @login_manager.user_loader
     def load_user(user_id): return db.session.get(User, int(user_id))
     from .routes import bp
