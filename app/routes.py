@@ -16,7 +16,7 @@ def parse_time(v):
     try:return datetime.fromisoformat(v.replace('Z','+00:00'))
     except:return utcnow()
 def aware(value):
-    if not value: return None
+    if not value:return None
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 def latest_reading(signal_id):
     return Reading.query.filter_by(signal_id=signal_id).order_by(desc(Reading.sampled_at)).first()
@@ -41,7 +41,7 @@ def evaluate_alarm(sig,value):
     elif existing: existing.state='CLOSED';existing.note=(existing.note or '')+' Auto-closed after return to normal.'
 
 @bp.get('/health')
-def health(): return {'status':'ok','service':'assettrack360-rev15b'}
+def health(): return {'status':'ok','service':'assettrack360-rev15c'}
 
 @bp.route('/register',methods=['GET','POST'])
 def register():
@@ -93,133 +93,64 @@ def public_home():
 @bp.get('/dashboard')
 @login_required
 def dashboard():
-    assets = Asset.query.filter_by(customer_id=tenant_id()).order_by(Asset.name).all()
-    sites = Site.query.filter_by(customer_id=tenant_id()).order_by(Site.name).all()
-    devices = Device.query.filter_by(customer_id=tenant_id(), active=True).all()
-    generated_at = utcnow()
-
-    counts = {'HEALTHY': 0, 'WARNING': 0, 'CRITICAL': 0, 'OFFLINE': 0}
-    asset_cards = []
-    attention_items = []
-    mapped_assets = []
-    tank_capacity = 0.0
-    tank_volume = 0.0
-    tank_count = 0
-    low_tanks = 0
-
+    assets=Asset.query.filter_by(customer_id=tenant_id()).order_by(Asset.name).all()
+    sites=Site.query.filter_by(customer_id=tenant_id()).order_by(Site.name).all()
+    devices=Device.query.filter_by(customer_id=tenant_id(),active=True).all()
+    now=utcnow(); counts={'HEALTHY':0,'WARNING':0,'CRITICAL':0,'OFFLINE':0}; cards=[]; attention=[]; mapped=[]
+    tank_capacity=tank_volume=0.0; tank_count=low_count=0
     for asset in assets:
-        status = asset_status(asset)
-        asset.status = status
-        counts[status] = counts.get(status, 0) + 1
-        device = Device.query.filter_by(customer_id=tenant_id(), asset_id=asset.id, active=True).first()
-        signal_map = {signal.key: latest_reading(signal.id) for signal in SignalDefinition.query.filter_by(asset_id=asset.id, enabled=True).all()}
-
-        metric_1_label, metric_1_value = 'STATUS', status
-        metric_2_label, metric_2_value = 'LAST CONTACT', 'No data'
-
-        if asset.asset_type == 'TANK':
-            level = signal_map.get('level_percent')
-            volume = signal_map.get('volume_l')
-            metric_1_label = 'LEVEL'
-            metric_1_value = f'{level.value:.1f}%' if level else 'Waiting'
-            metric_2_label = 'VOLUME'
-            metric_2_value = f'{volume.value:,.0f} {asset.capacity_unit or "L"}' if volume else 'Waiting'
-            tank_count += 1
-            tank_capacity += float(asset.capacity or 0)
-            tank_volume += float(volume.value if volume else 0)
-            if level and level.value <= 20: low_tanks += 1
-        elif asset.asset_type == 'TRACKER':
-            location = Location.query.filter_by(customer_id=tenant_id(), asset_id=asset.id).order_by(desc(Location.sampled_at)).first()
-            metric_1_label = 'MOVEMENT'
-            metric_1_value = f'{location.speed_kmh or 0:.0f} km/h' if location else 'No position'
-            metric_2_label = 'POSITION'
-            metric_2_value = f'{location.latitude:.4f}, {location.longitude:.4f}' if location else 'Waiting'
-        elif asset.asset_type == 'VIBRATION':
-            vibration = signal_map.get('vibration_rms')
-            temperature = signal_map.get('temperature_c')
-            metric_1_label = 'VIBRATION'
-            metric_1_value = f'{vibration.value:.2f} mm/s' if vibration else 'Waiting'
-            metric_2_label = 'TEMPERATURE'
-            metric_2_value = f'{temperature.value:.1f} °C' if temperature else 'Waiting'
+        status=asset_status(asset);asset.status=status;counts[status]=counts.get(status,0)+1
+        device=Device.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,active=True).first()
+        sigs={x.key:latest_reading(x.id) for x in SignalDefinition.query.filter_by(asset_id=asset.id,enabled=True)}
+        l1,v1,l2,v2='STATUS',status,'LAST CONTACT','No data'
+        if asset.asset_type=='TANK':
+            level=sigs.get('level_percent');volume=sigs.get('volume_l');l1='LEVEL';v1=f'{level.value:.1f}%' if level else 'Waiting';l2='VOLUME';v2=f'{volume.value:,.0f} {asset.capacity_unit or "L"}' if volume else 'Waiting';tank_count+=1;tank_capacity+=float(asset.capacity or 0);tank_volume+=float(volume.value if volume else 0);low_count+=1 if level and level.value<=20 else 0
+        elif asset.asset_type=='TRACKER':
+            loc=Location.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).order_by(desc(Location.sampled_at)).first();l1='MOVEMENT';v1=f'{loc.speed_kmh or 0:.0f} km/h' if loc else 'No position';l2='POSITION';v2=f'{loc.latitude:.4f}, {loc.longitude:.4f}' if loc else 'Waiting'
+        elif asset.asset_type=='VIBRATION':
+            vib=sigs.get('vibration_rms');temp=sigs.get('temperature_c');l1lk=''
+            l1='VIBRATION';v1=f'{vib.value:.2f} mm/s' if vib else 'Waiting';l2='TEMPERATURE';v2=f'{temp.value:.1f} °C' if temp else 'Waiting'
         else:
-            first_signal = next((reading for reading in signal_map.values() if reading), None)
-            metric_1_label = 'LATEST VALUE'
-            metric_1_value = f'{first_signal.value:.2f} {first_signal.unit or ""}' if first_signal else 'Waiting'
-            metric_2_label = 'INPUTS'
-            metric_2_value = str(len(signal_map))
-
-        last_seen = 'No telemetry'
+            first=next((r for r in sigs.values() if r),None);l1='LATEST VALUE';v1=f'{first.value:.2f} {first.unit or ""}' if first else 'Waiting';l2='INPUTS';v2=str(len(sigs))
+        seen='No telemetry'
         if asset.last_seen:
-            age = generated_at - aware(asset.last_seen)
-            minutes = max(0, int(age.total_seconds() // 60))
-            last_seen = 'Just now' if minutes < 1 else f'{minutes} min ago' if minutes < 60 else f'{minutes // 60} h ago'
-
-        asset_cards.append({
-            'asset': asset, 'status': status,
-            'metric_1_label': metric_1_label, 'metric_1_value': metric_1_value,
-            'metric_2_label': metric_2_label, 'metric_2_value': metric_2_value,
-            'device_type': device.device_type if device else 'No device assigned',
-            'last_seen': last_seen
-        })
-
-        if status in ('CRITICAL', 'WARNING', 'OFFLINE'):
-            message = 'Communication timeout' if status == 'OFFLINE' else 'Active condition requires review'
-            attention_items.append({'asset': asset, 'status': status, 'message': message})
-
-        location = Location.query.filter_by(customer_id=tenant_id(), asset_id=asset.id).order_by(desc(Location.sampled_at)).first()
-        if location:
-            mapped_assets.append({'id': asset.id, 'name': asset.name, 'type': asset.asset_type, 'status': status, 'lat': location.latitude, 'lon': location.longitude})
-
-    status_order = {'CRITICAL': 0, 'WARNING': 1, 'OFFLINE': 2, 'HEALTHY': 3}
-    attention_items.sort(key=lambda item: status_order.get(item['status'], 9))
-
-    alarms = Alarm.query.filter_by(customer_id=tenant_id()).order_by(desc(Alarm.opened_at)).limit(8).all()
-    recent_events = []
-    for alarm in alarms:
-        event_asset = db.session.get(Asset, alarm.asset_id)
-        recent_events.append({
-            'title': alarm.message,
-            'detail': f'{event_asset.name if event_asset else "Asset"} · {alarm.severity} · {alarm.state}',
-            'time': aware(alarm.opened_at).strftime('%d %b %H:%M')
-        })
-
-    online_devices = sum(1 for device in devices if device.last_seen and generated_at - aware(device.last_seen) <= timedelta(minutes=30))
-    connectivity = {
-        'online': online_devices,
-        'offline': max(0, len(devices) - online_devices),
-        'online_percent': (online_devices / len(devices) * 100) if devices else 0,
-        'firmware_reported': sum(1 for device in devices if device.firmware),
-        'unassigned': sum(1 for asset in assets if not any(device.asset_id == asset.id for device in devices))
-    }
-    tank_summary = {
-        'count': tank_count,
-        'capacity': tank_capacity,
-        'volume': tank_volume,
-        'percent': (tank_volume / tank_capacity * 100) if tank_capacity else 0,
-        'low_count': low_tanks
-    }
-
-    return render_template(
-        'dashboard.html', assets=assets, sites=sites, site_count=len(sites),
-        device_count=len(devices), counts=counts, asset_cards=asset_cards,
-        attention_items=attention_items, mapped_assets=mapped_assets,
-        tank_summary=tank_summary, connectivity=connectivity,
-        recent_events=recent_events, generated_at=generated_at
-    )
+            mins=max(0,int((now-aware(asset.last_seen)).total_seconds()//60));seen='Just now' if mins<1 else f'{mins} min ago' if mins<60 else f'{mins//60} h ago'
+        cards.append({'asset':asset,'status':status,'metric_1_label':l1,'metric_1_value':v1,'metric_2_label':l2,'metric_2_value':v2,'device_type':device.device_type if device else 'No device assigned','last_seen':seen})
+        if status in ('CRITICAL','WARNING','OFFLINE'):attention.append({'asset':asset,'status':status,'message':'Communication timeout' if status=='OFFLINE' else 'Active condition requires review'})
+        loc=Location.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).order_by(desc(Location.sampled_at)).first()
+        if loc:mapped.append({'id':asset.id,'name':asset.name,'type':asset.asset_type,'status':status,'lat':loc.latitude,'lon':loc.longitude})
+    order={'CRITICAL':0,'WARNING':1,'OFFLINE':2};attention.sort(key=lambda x:order.get(x['status'],9))
+    recent=[]
+    for alarm in Alarm.query.filter_by(customer_id=tenant_id()).order_by(desc(Alarm.opened_at)).limit(8):
+        a=db.session.get(Asset,alarm.asset_id);recent.append({'title':alarm.message,'detail':f'{a.name if a else "Asset"} · {alarm.severity} · {alarm.state}','time':aware(alarm.opened_at).strftime('%d %b %H:%M')})
+    online=sum(1 for d in devices if d.last_seen and now-aware(d.last_seen)<=timedelta(minutes=30))
+    connectivity={'online':online,'offline':max(0,len(devices)-online),'online_percent':online/len(devices)*100 if devices else 0,'firmware_reported':sum(1 for d in devices if d.firmware),'unassigned':sum(1 for a in assets if not any(d.asset_id==a.id for d in devices))}
+    tank={'count':tank_count,'capacity':tank_capacity,'volume':tank_volume,'percent':tank_volume/tank_capacity*100 if tank_capacity else 0,'low_count':low_count}
+    return render_template('dashboard.html',assets=assets,sites=sites,site_count=len(sites),device_count=len(devices),counts=counts,asset_cards=cards,attention_items=attention,mapped_assets=mapped,tank_summary=tank,connectivity=connectivity,recent_events=recent,generated_at=now)
 
 @bp.get('/asset/<int:asset_id>')
 @login_required
 def asset_view(asset_id):
-    asset=Asset.query.filter_by(id=asset_id,customer_id=tenant_id()).first_or_404();asset.status=asset_status(asset)
-    signals=SignalDefinition.query.filter_by(asset_id=asset.id,enabled=True).all(); cards=[]
-    for sig in signals:
-        latest=Reading.query.filter_by(signal_id=sig.id).order_by(desc(Reading.sampled_at)).first()
-        history=Reading.query.filter_by(signal_id=sig.id).order_by(desc(Reading.sampled_at)).limit(30).all()[::-1]
-        cards.append({'signal':sig,'latest':latest,'history':history})
-    alarms=Alarm.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).order_by(desc(Alarm.opened_at)).limit(20).all()
-    location=Location.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).order_by(desc(Location.sampled_at)).first()
-    device=Device.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,active=True).first()
-    return render_template('asset.html',asset=asset,cards=cards,alarms=alarms,location=location,device=device)
+    asset=Asset.query.filter_by(id=asset_id,customer_id=tenant_id()).first_or_404();asset.status=asset_status(asset);now=utcnow()
+    signals=SignalDefinition.query.filter_by(asset_id=asset.id,enabled=True).order_by(SignalDefinition.label).all();cards=[];lookup={};series=[]
+    for signal in signals:
+        latest=latest_reading(signal.id);history=Reading.query.filter_by(signal_id=signal.id).order_by(desc(Reading.sampled_at)).limit(48).all()[::-1];lookup[signal.key]=latest;cards.append({'signal':signal,'latest':latest,'history':history})
+        if history:series.append({'key':signal.key,'label':signal.label,'unit':signal.unit or '','values':[{'time':aware(r.sampled_at).strftime('%H:%M'),'value':r.value} for r in history]})
+    alarms=Alarm.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).order_by(desc(Alarm.opened_at)).limit(30).all();open_alarms=[a for a in alarms if a.state in ('OPEN','ACKNOWLEDGED')]
+    device=Device.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,active=True).first();location=Location.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).order_by(desc(Location.sampled_at)).first();route=Location.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).order_by(desc(Location.sampled_at)).limit(200).all()[::-1]
+    last='No telemetry received'
+    if asset.last_seen:
+        sec=max(0,int((now-aware(asset.last_seen)).total_seconds()));last='Just now' if sec<60 else f'{sec//60} min ago' if sec<3600 else f'{sec//3600} h ago' if sec<86400 else f'{sec//86400} d ago'
+    ctx={'level':lookup.get('level_percent'),'volume':lookup.get('volume_l'),'battery':lookup.get('battery_v'),'solar':lookup.get('solar_v'),'speed':lookup.get('speed_kmh'),'vibration':lookup.get('vibration_rms'),'temperature':lookup.get('temperature_c')}
+    tank=None
+    if asset.asset_type=='TANK':
+        lvl=ctx['level'].value if ctx['level'] else None;vol=ctx['volume'].value if ctx['volume'] else None;cap=float(asset.capacity or 0);state='CRITICAL' if lvl is not None and lvl<=10 else 'WARNING' if lvl is not None and lvl<=20 else 'HEALTHY' if lvl is not None else 'WAITING';tank={'level':lvl,'volume':vol,'capacity':cap,'available':max(0,cap-float(vol or 0)) if cap else None,'unit':asset.capacity_unit or 'L','state':state}
+    track=None
+    if asset.asset_type=='TRACKER' or location:track={'latitude':location.latitude if location else None,'longitude':location.longitude if location else None,'speed':location.speed_kmh if location else None,'accuracy':location.accuracy_m if location else None,'heading':location.heading if location else None,'last_fix':aware(location.sampled_at).strftime('%Y-%m-%d %H:%M UTC') if location else 'Waiting for GNSS','route_count':len(route)}
+    vib=None
+    if asset.asset_type=='VIBRATION':
+        value=ctx['vibration'].value if ctx['vibration'] else None;vib={'rms':value,'temperature':ctx['temperature'].value if ctx['temperature'] else None,'condition':'CRITICAL' if value is not None and value>=7.1 else 'WARNING' if value is not None and value>=4.5 else 'HEALTHY' if value is not None else 'WAITING'}
+    return render_template('asset.html',asset=asset,signal_cards=cards,signal_lookup=lookup,chart_series=series,alarms=alarms,open_alarms=open_alarms,device=device,location=location,route_points=route,last_contact=last,generated_at=now,context=ctx,tank_stats=tank,tracking_stats=track,vibration_stats=vib)
 
 @bp.route('/asset/<int:asset_id>/signals',methods=['GET','POST'])
 @login_required
