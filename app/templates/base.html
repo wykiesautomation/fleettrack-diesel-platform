@@ -1,0 +1,3 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{% block title %}AssetTrack 360{% endblock %}</title><link rel="stylesheet" href="{{url_for('static',filename='style.css')}}"></head><body>
+<header><a class="brand" href="/">AssetTrack <b>360</b></a>{% if current_user.is_authenticated %}<nav><a href="/">Fleet</a><a href="/onboarding">Add Asset</a><a href="/logout">Sign out</a></nav>{% endif %}</header>
+<main>{% for c,m in get_flashed_messages(with_categories=true) %}<div class="flash {{c}}">{{m}}</div>{% endfor %}{% block body %}{% endblock %}</main><footer>Remote asset visibility across devices, signals and sites.</footer></body></html>
