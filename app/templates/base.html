@@ -1,28 +1,26 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
 
-    <title>
-        {% block title %}AssetTrack 360{% endblock %}
-    </title>
+    <title>{% block title %}AssetTrack 360{% endblock %}</title>
 
     <link
-        rel="stylesheet"
-        href="{{ url_forhead>
+        rel="block head_extra %}{% endblock %}
+</head>
 
 <body>
     <header>
-        /
+         }}">
             AssetTrack <b>360</b>
         </a>
 
         {% if current_user.is_authenticated %}
         <nav>
-            /Fleet</a>
-            /onboardingAdd Asset</a>
-            /logoutSign out</a>
+             }}">Fleet</a>
+             }}">Add Asset</a>
+             }}">Sign out</a>
         </nav>
         {% endif %}
     </header>
@@ -44,4 +42,3 @@
     {% block scripts %}{% endblock %}
 </body>
 </html>
-`
