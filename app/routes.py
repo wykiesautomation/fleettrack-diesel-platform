@@ -79,6 +79,12 @@ def create_default_signals(asset):
       'GENERIC':[('analog_1','Universal Input','CUSTOM','','numeric',None,None,None,None)]}
     for key,label,stype,unit,widget,wl,cl,wh,ch in profiles.get(asset.asset_type,profiles['GENERIC']):db.session.add(SignalDefinition(customer_id=asset.customer_id,asset_id=asset.id,key=key,label=label,signal_type=stype,unit=unit,widget=widget,warning_low=wl,critical_low=cl,warning_high=wh,critical_high=ch))
 
+@bp.get('/')
+def public_home():
+    if current_user.is_authenticated:
+        return redirect(url_for('main.dashboard'))
+
+    return render_template('public_home.html')
 @bp.get('/dashboard')
 @login_required
 def dashboard():
