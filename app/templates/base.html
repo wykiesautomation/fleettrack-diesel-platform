@@ -1,3 +1,43 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#06131f"><title>{% block title %}AssetTrack 360{% endblock %}</title><style>
-:root{--bg:#06131f;--nav:#071725;--card:#102b43;--card2:#0b2134;--line:#28516a;--cyan:#00c8e8;--lime:#a4d92f;--orange:#ffad2f;--red:#ff526d;--text:#edf7fb;--muted:#8faebb;--max:1320px}*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:radial-gradient(circle at 80% 0,rgba(0,200,232,.07),transparent 28%),var(--bg);color:var(--text);font-family:Inter,Segoe UI,Arial,sans-serif}a{color:inherit}.topbar{position:sticky;top:0;z-index:100;background:rgba(7,23,37,.94);backdrop-filter:blur(16px);border-bottom:1px solid #17394f}.nav{max-width:var(--max);height:72px;margin:auto;padding:0 22px;display:flex;align-items:center;justify-content:space-between;gap:25px}.brand{text-decoration:none;font-size:23px;font-weight:850;letter-spacing:-.7px}.brand b{color:var(--cyan)}.navlinks{display:flex;align-items:center;gap:7px}.navlinks a{padding:9px 11px;border-radius:9px;text-decoration:none;color:#b4ccd7;font-size:12px;font-weight:750}.navlinks a:hover{background:#102d45;color:white}.navlinks .accent{background:var(--cyan);color:#03121b}.menu{display:none;background:#102d45;color:white;border:1px solid #31566c;border-radius:9px;padding:8px 11px}.content{max-width:var(--max);margin:auto;padding:34px 22px 55px}.eyebrow{font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--cyan);font-weight:950}.button{display:inline-flex;justify-content:center;align-items:center;padding:11px 15px;border-radius:10px;background:#122d45;border:1px solid #31566c;text-decoration:none;font-weight:850}.button.primary{background:var(--cyan);border-color:transparent;color:#03121b}.flash{max-width:var(--max);margin:15px auto 0;padding:12px 17px;border-radius:10px;background:#173d28;border:1px solid #326544}.flash.error{background:#4f1e2b;border-color:#8b354a}.footer{border-top:1px solid #17394f;padding:24px;text-align:center;color:#607f8f;font-size:10px}@media(max-width:900px){.menu{display:block}.navlinks{display:none;position:absolute;top:64px;left:12px;right:12px;padding:12px;background:#0b2235;border:1px solid #28516a;border-radius:14px;flex-direction:column;align-items:stretch}.navlinks.open{display:flex}.navlinks a{text-align:center;padding:12px}.content{padding:25px 14px 45px}}
-</style>{% block head_extra %}{% endblock %}</head><body><header class="topbar"><nav class="nav"><a class="brand" href="{{url_for('main.dashboard') if current_user.is_authenticated else '/'}}">AssetTrack <b>360</b></a><button class="menu" onclick="document.getElementById('navlinks').classList.toggle('open')">Menu</button><div class="navlinks" id="navlinks">{% if current_user.is_authenticated %}<a href="{{url_for('main.dashboard')}}">Fleet</a><a href="{{url_for('main.onboarding')}}">Add Asset</a><a href="/devices">Devices</a><a href="/account">Account</a><a href="/plans">Plans</a><a href="/billing">Billing</a><a href="{{url_for('main.logout')}}">Sign out</a>{% else %}<a href="/">Website</a><a href="/login">Customer Login</a><a class="accent" href="/register">Start Trial</a>{% endif %}</div></nav></header>{% for category,message in get_flashed_messages(with_categories=true) %}<div class="flash {{category}}">{{message}}</div>{% endfor %}<main class="content">{% block body %}{% endblock %}</main><footer class="footer">Copyright: © 2026 JP Van Wyk. All rights reserved. · AssetTrack 360 · Powered by Wykies Automation</footer><script>document.addEventListener('click',e=>{const n=document.getElementById('navlinks');if(n&&n.classList.contains('open')&&!e.target.closest('.nav'))n.classList.remove('open')})</script>{% block scripts %}{% endblock %}</body></html>
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}AssetTrack 360{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    {% block head_extra %}{% endblock %}
+</head>
+<body>
+    <header>
+        <a class="brand" href="{{ url_for('main.dashboard') }}">
+            AssetTrack <b>360</b>
+        </a>
+
+        {% if current_user.is_authenticated %}
+        <nav>
+            <a href="{{ url_for('main.dashboard') }}">Fleet</a>
+            <a href="{{ url_for('main.onboarding') }}">Add Asset</a>
+            <a href="{{ url_for('main.integrations') }}">Integrations</a>
+            <a href="{{ url_for('main.devices') }}">Devices</a>
+            <a href="{{ url_for('main.account') }}">Account</a>
+            <a href="{{ url_for('main.billing') }}">Billing</a>
+            <a href="{{ url_for('main.logout') }}">Sign out</a>
+        </nav>
+        {% endif %}
+    </header>
+
+    <main>
+        {% for category, message in get_flashed_messages(with_categories=true) %}
+        <div class="flash {{ category }}">{{ message }}</div>
+        {% endfor %}
+
+        {% block body %}{% endblock %}
+    </main>
+
+    <footer>
+        Remote asset visibility across devices, signals and sites.
+    </footer>
+
+    {% block scripts %}{% endblock %}
+</body>
+</html>
