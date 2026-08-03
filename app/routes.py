@@ -6,7 +6,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import desc
 from . import db
 from .payfast import config as payfast_config,build_checkout,event_hash,valid_signature,valid_source,server_validate,forwarded_ip
-from .models import Customer,User,Site,Asset,Device,SignalDefinition,Reading,Alarm,Location,WorkspaceProfile,SubscriptionPlan,Subscription,PaymentRecord,PayFastEvent,SubscriptionAuditEvent,IntegrationConnector,IntegrationSignalMapping,IntegrationEvent,MqttSubscription,MqttTopicMapping,MqttMessageEvent
+from .models import Customer,User,Site,Asset,Device,SignalDefinition,Reading,Alarm,Location,WorkspaceProfile,SubscriptionPlan,Subscription,PaymentRecord,PayFastEvent,SubscriptionAuditEvent,IntegrationConnector,IntegrationSignalMapping,IntegrationEvent,ConnectorEndpointConfig,UniversalSourceMapping,WebhookReceipt,EdgeGateway,IntegrationJobEvent,MqttSubscription,MqttTopicMapping,MqttMessageEvent
 bp=Blueprint('main',__name__)
 
 def utcnow(): return datetime.now(timezone.utc)
@@ -455,42 +455,73 @@ def integration_asset_signals(asset_id):
     return jsonify(signals=[{'id':s.id,'key':s.key,'label':s.label,'unit':s.unit} for s in SignalDefinition.query.filter_by(asset_id=asset.id,enabled=True).order_by(SignalDefinition.label)])
 
 
+@bp.route('/integrations/<int:connector_id>/universal',methods=['GET','POST'])
+@login_required
+def universal_connector(connector_id):
+ connector=connector_for_tenant(connector_id);cfg=ConnectorEndpointConfig.query.filter_by(connector_id=connector.id).first()
+ if not cfg:cfg=ConnectorEndpointConfig(customer_id=tenant_id(),connector_id=connector.id);db.session.add(cfg);db.session.commit()
+ if request.method=='POST':
+  connector.endpoint=request.form.get('endpoint','').strip();connector.poll_interval_seconds=max(10,int(request.form.get('poll_interval') or 60));cfg.auth_mode=request.form.get('auth_mode','NONE');cfg.secret_env_ref=request.form.get('secret_env_ref','').strip() or None;cfg.secondary_secret_env_ref=request.form.get('secondary_secret_env_ref','').strip() or None;cfg.timeout_seconds=max(5,int(request.form.get('timeout_seconds') or 20));cfg.retry_limit=max(0,min(10,int(request.form.get('retry_limit') or 3)));cfg.backoff_seconds=max(1,int(request.form.get('backoff_seconds') or 5));cfg.hmac_secret_env_ref=request.form.get('hmac_secret_env_ref','').strip() or None;cfg.source_ip_allowlist=request.form.get('source_ip_allowlist','').strip() or None;connector.status='CONFIGURED';db.session.commit();flash('Connector execution settings saved.','ok');return redirect(url_for('main.universal_connector',connector_id=connector.id))
+ mappings=UniversalSourceMapping.query.filter_by(customer_id=tenant_id(),connector_id=connector.id).all();events=IntegrationJobEvent.query.filter_by(customer_id=tenant_id(),connector_id=connector.id).order_by(desc(IntegrationJobEvent.created_at)).limit(30).all();assets=Asset.query.filter_by(customer_id=tenant_id()).order_by(Asset.name).all()
+ return render_template('universal_connector.html',connector=connector,cfg=cfg,mappings=mappings,events=events,assets=assets)
+@bp.post('/integrations/<int:connector_id>/universal/mappings')
+@login_required
+def universal_mapping_add(connector_id):
+ connector=connector_for_tenant(connector_id);asset=Asset.query.filter_by(id=request.form.get('asset_id',type=int),customer_id=tenant_id()).first_or_404();signal=SignalDefinition.query.filter_by(id=request.form.get('signal_id',type=int),asset_id=asset.id,customer_id=tenant_id()).first_or_404();db.session.add(UniversalSourceMapping(customer_id=tenant_id(),connector_id=connector.id,asset_id=asset.id,signal_id=signal.id,source_path=request.form.get('source_path','').strip(),timestamp_path=request.form.get('timestamp_path','').strip() or None,quality_path=request.form.get('quality_path','').strip() or None,data_type=request.form.get('data_type','FLOAT'),scale=float(request.form.get('scale') or 1),offset=float(request.form.get('offset') or 0),byte_order=request.form.get('byte_order','BIG'),word_order=request.form.get('word_order','BIG'),enabled=True));db.session.commit();flash('Universal mapping added.','ok');return redirect(url_for('main.universal_connector',connector_id=connector.id))
+@bp.post('/api/v1/integrations/<int:connector_id>/webhook')
+def integration_webhook(connector_id):
+ import hashlib,hmac,os,time
+ connector=IntegrationConnector.query.filter_by(id=connector_id,connector_type='WEBHOOK',enabled=True).first_or_404();cfg=ConnectorEndpointConfig.query.filter_by(connector_id=connector.id).first_or_404();raw=request.get_data(cache=True);key=request.headers.get(cfg.idempotency_header,'').strip()
+ if not key:return jsonify(error='idempotency_key_required'),400
+ existing=WebhookReceipt.query.filter_by(connector_id=connector.id,idempotency_key=key).first()
+ if existing:return jsonify(status='duplicate'),200
+ secret=os.getenv(cfg.hmac_secret_env_ref or '','');supplied=request.headers.get(cfg.hmac_header,'').removeprefix('sha256=').lower();expected=hmac.new(secret.encode(),raw,hashlib.sha256).hexdigest() if secret else ''
+ if not secret or not hmac.compare_digest(supplied,expected):return jsonify(error='invalid_signature'),401
+ from .integration_runtime import map_payload
+ payload=request.get_json(silent=True) or {};mapped=map_payload(connector,payload,'webhook');db.session.add(WebhookReceipt(customer_id=connector.customer_id,connector_id=connector.id,idempotency_key=key,body_hash=hashlib.sha256(raw).hexdigest(),status='ACCEPTED',mapped_points=mapped,source_ip=request.remote_addr,detail=f'{mapped} points mapped'));connector.last_success_at=utcnow();connector.status='CONNECTED';db.session.commit();return jsonify(status='accepted',mapped_points=mapped),202
+@bp.post('/api/v1/edge/heartbeat')
+def edge_heartbeat():
+ token=request.headers.get('Authorization','').removeprefix('Bearer ').strip();g=EdgeGateway.query.filter_by(api_token=token,active=True).first()
+ if not g:return jsonify(error='unauthorized'),401
+ g.last_heartbeat_at=utcnow();g.last_ip=request.remote_addr;data=request.get_json(silent=True) or {};g.version=data.get('version',g.version);g.capabilities=data.get('capabilities',g.capabilities);db.session.commit();return jsonify(status='ok')
+@bp.post('/api/v1/edge/ingest')
+def edge_ingest():
+ token=request.headers.get('Authorization','').removeprefix('Bearer ').strip();g=EdgeGateway.query.filter_by(api_token=token,active=True).first()
+ if not g:return jsonify(error='unauthorized'),401
+ data=request.get_json(silent=True) or {};connector=IntegrationConnector.query.filter_by(customer_id=g.customer_id,edge_gateway_id=data.get('connector_key')).first()
+ if not connector:return jsonify(error='connector_not_found'),404
+ from .integration_runtime import path_get
+ mapped=0
+ for point in data.get('points',[]):
+  for m in UniversalSourceMapping.query.filter_by(connector_id=connector.id,source_path=point.get('source_path'),enabled=True).all():
+   try:
+    raw=float(point['value']);value=raw*m.scale+m.offset;db.session.add(Reading(customer_id=g.customer_id,asset_id=m.asset_id,signal_id=m.signal_id,sampled_at=utcnow(),value=value,raw_value=raw,unit=m.signal.unit,quality=point.get('quality','GOOD'),sequence=f'edge:{g.id}:{m.id}:{time.time_ns()}'));db.session.get(Asset,m.asset_id).last_seen=utcnow();m.last_value=value;m.last_success_at=utcnow();mapped+=1
+   except Exception as exc:m.last_error=f'{type(exc).__name__}: edge mapping failed'
+ connector.last_success_at=utcnow();connector.status='CONNECTED';g.last_heartbeat_at=utcnow();db.session.commit();return jsonify(status='accepted',mapped_points=mapped),202
 @bp.route('/integrations/<int:connector_id>/mqtt',methods=['GET','POST'])
 @login_required
 def mqtt_connector(connector_id):
-    connector=connector_for_tenant(connector_id)
-    if connector.connector_type!='MQTT':abort(404)
-    cfg=dict(connector.config_json or {})
-    if request.method=='POST':
-        connector.endpoint=request.form.get('endpoint','').strip();connector.poll_interval_seconds=max(5,int(request.form.get('refresh_seconds') or 15))
-        cfg.update({'client_id':request.form.get('client_id','').strip(),'username_env':request.form.get('username_env','').strip(),'password_env':request.form.get('password_env','').strip(),'ca_file_env':request.form.get('ca_file_env','').strip()})
-        connector.config_json=cfg;connector.status='CONFIGURED';connector.last_error=None;db.session.add(IntegrationEvent(customer_id=tenant_id(),connector_id=connector.id,event_type='MQTT_CONFIGURED',status='OK',detail='Broker settings updated with environment-variable secret references'));db.session.commit();flash('MQTT broker settings saved.','ok');return redirect(url_for('main.mqtt_connector',connector_id=connector.id))
-    return render_template('mqtt_connector.html',connector=connector,cfg=cfg,subscriptions=MqttSubscription.query.filter_by(customer_id=tenant_id(),connector_id=connector.id).order_by(MqttSubscription.topic_filter).all(),mappings=MqttTopicMapping.query.filter_by(customer_id=tenant_id(),connector_id=connector.id).order_by(MqttTopicMapping.id).all(),events=MqttMessageEvent.query.filter_by(customer_id=tenant_id(),connector_id=connector.id).order_by(desc(MqttMessageEvent.received_at)).limit(30).all(),assets=Asset.query.filter_by(customer_id=tenant_id()).order_by(Asset.name).all())
+ c=connector_for_tenant(connector_id);cfg=dict(c.config_json or {})
+ if c.connector_type!='MQTT':abort(404)
+ if request.method=='POST':
+  c.endpoint=request.form.get('endpoint','').strip();cfg.update({'client_id':request.form.get('client_id','').strip(),'username_env':request.form.get('username_env','').strip(),'password_env':request.form.get('password_env','').strip(),'ca_file_env':request.form.get('ca_file_env','').strip()});c.config_json=cfg;c.status='CONFIGURED';db.session.commit();return redirect(url_for('main.mqtt_connector',connector_id=c.id))
+ return render_template('mqtt_connector.html',connector=c,cfg=cfg,subscriptions=MqttSubscription.query.filter_by(customer_id=tenant_id(),connector_id=c.id).all(),mappings=MqttTopicMapping.query.filter_by(customer_id=tenant_id(),connector_id=c.id).all(),events=MqttMessageEvent.query.filter_by(customer_id=tenant_id(),connector_id=c.id).order_by(desc(MqttMessageEvent.received_at)).limit(30).all(),assets=Asset.query.filter_by(customer_id=tenant_id()).all())
 @bp.post('/integrations/<int:connector_id>/mqtt/subscriptions')
 @login_required
 def mqtt_subscription_add(connector_id):
-    connector=connector_for_tenant(connector_id);topic=request.form.get('topic_filter','').strip();qos=request.form.get('qos',type=int)
-    if connector.connector_type!='MQTT' or not topic or qos not in (0,1,2):flash('Valid topic and QoS required.','error');return redirect(url_for('main.mqtt_connector',connector_id=connector.id))
-    db.session.add(MqttSubscription(customer_id=tenant_id(),connector_id=connector.id,topic_filter=topic,qos=qos,enabled=True))
-    try:db.session.commit();flash('Subscription added.','ok')
-    except Exception:db.session.rollback();flash('Topic filter already exists.','error')
-    return redirect(url_for('main.mqtt_connector',connector_id=connector.id))
+ c=connector_for_tenant(connector_id);db.session.add(MqttSubscription(customer_id=tenant_id(),connector_id=c.id,topic_filter=request.form.get('topic_filter','').strip(),qos=request.form.get('qos',type=int) or 1));db.session.commit();return redirect(url_for('main.mqtt_connector',connector_id=c.id))
 @bp.post('/integrations/<int:connector_id>/mqtt/subscriptions/<int:subscription_id>/toggle')
 @login_required
 def mqtt_subscription_toggle(connector_id,subscription_id):
-    connector=connector_for_tenant(connector_id);sub=MqttSubscription.query.filter_by(id=subscription_id,connector_id=connector.id,customer_id=tenant_id()).first_or_404();sub.enabled=not sub.enabled;db.session.commit();return redirect(url_for('main.mqtt_connector',connector_id=connector.id))
+ c=connector_for_tenant(connector_id);x=MqttSubscription.query.filter_by(id=subscription_id,connector_id=c.id,customer_id=tenant_id()).first_or_404();x.enabled=not x.enabled;db.session.commit();return redirect(url_for('main.mqtt_connector',connector_id=c.id))
 @bp.post('/integrations/<int:connector_id>/mqtt/mappings')
 @login_required
 def mqtt_mapping_add(connector_id):
-    connector=connector_for_tenant(connector_id);sub=MqttSubscription.query.filter_by(id=request.form.get('subscription_id',type=int),connector_id=connector.id,customer_id=tenant_id()).first_or_404();asset=Asset.query.filter_by(id=request.form.get('asset_id',type=int),customer_id=tenant_id()).first_or_404();signal=SignalDefinition.query.filter_by(id=request.form.get('signal_id',type=int),asset_id=asset.id,customer_id=tenant_id()).first_or_404()
-    db.session.add(MqttTopicMapping(customer_id=tenant_id(),connector_id=connector.id,subscription_id=sub.id,asset_id=asset.id,signal_id=signal.id,json_path=request.form.get('json_path','value').strip() or 'value',timestamp_path=request.form.get('timestamp_path','').strip() or None,quality_path=request.form.get('quality_path','').strip() or None,scale=float(request.form.get('scale') or 1),offset=float(request.form.get('offset') or 0),enabled=True))
-    try:db.session.commit();flash('MQTT mapping added.','ok')
-    except Exception:db.session.rollback();flash('Mapping already exists.','error')
-    return redirect(url_for('main.mqtt_connector',connector_id=connector.id))
+ c=connector_for_tenant(connector_id);a=Asset.query.filter_by(id=request.form.get('asset_id',type=int),customer_id=tenant_id()).first_or_404();sig=SignalDefinition.query.filter_by(id=request.form.get('signal_id',type=int),asset_id=a.id).first_or_404();db.session.add(MqttTopicMapping(customer_id=tenant_id(),connector_id=c.id,subscription_id=request.form.get('subscription_id',type=int),asset_id=a.id,signal_id=sig.id,json_path=request.form.get('json_path','value'),timestamp_path=request.form.get('timestamp_path') or None,quality_path=request.form.get('quality_path') or None,scale=float(request.form.get('scale') or 1),offset=float(request.form.get('offset') or 0)));db.session.commit();return redirect(url_for('main.mqtt_connector',connector_id=c.id))
 @bp.post('/integrations/<int:connector_id>/mqtt/mappings/<int:mapping_id>/toggle')
 @login_required
 def mqtt_mapping_toggle(connector_id,mapping_id):
-    connector=connector_for_tenant(connector_id);mapping=MqttTopicMapping.query.filter_by(id=mapping_id,connector_id=connector.id,customer_id=tenant_id()).first_or_404();mapping.enabled=not mapping.enabled;db.session.commit();return redirect(url_for('main.mqtt_connector',connector_id=connector.id))
+ c=connector_for_tenant(connector_id);x=MqttTopicMapping.query.filter_by(id=mapping_id,connector_id=c.id,customer_id=tenant_id()).first_or_404();x.enabled=not x.enabled;db.session.commit();return redirect(url_for('main.mqtt_connector',connector_id=c.id))
 @bp.get('/subscription-required')
 @login_required
 def subscription_required():
