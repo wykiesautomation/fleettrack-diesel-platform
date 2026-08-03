@@ -240,7 +240,6 @@ def billing_cancel():return render_template('payment_result.html',result='cancel
 @bp.post('/payfast/notify')
 def payfast_notify():
     cfg = payfast_config()
-    raw_body = request.get_data(cache=True, as_text=True)
     form = request.form
     digest = event_hash(form)
     existing = PayFastEvent.query.filter_by(event_hash=digest).first()
@@ -254,16 +253,17 @@ def payfast_notify():
 
     reference = form.get('m_payment_id', '')
     payment = PaymentRecord.query.filter_by(merchant_payment_id=reference).first()
-    signature_ok = valid_signature(form, cfg, raw_body)
-    signature_debug = signature_diagnostics(form, cfg, raw_body)
+    signature_ok = valid_signature(form, cfg)
+    signature_debug = signature_diagnostics(form, cfg)
     current_app.logger.warning(
-        "PayFast ITN signature diagnostics raw_body=%s fields=%s passphrase=%s raw_match=%s received_match=%s canonical_match=%s",
-        signature_debug['raw_body_present'],
+        "PayFast ITN signature modes fields=%s passphrase=%s received_with=%s canonical_with=%s received_without=%s canonical_without=%s sandbox=%s",
         signature_debug['field_count'],
         signature_debug['passphrase_present'],
-        signature_debug['raw_match'],
-        signature_debug['received_match'],
-        signature_debug['canonical_match'],
+        signature_debug['received_with_passphrase'],
+        signature_debug['canonical_with_passphrase'],
+        signature_debug['received_without_passphrase'],
+        signature_debug['canonical_without_passphrase'],
+        cfg['sandbox'],
     )
     source_ok = valid_source(request, cfg)
     server_ok = server_validate(form, cfg)

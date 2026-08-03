@@ -1,7 +1,7 @@
 import hashlib
 import os
 import socket
-from urllib.parse import quote_plus, unquote_plus, urlencode
+from urllib.parse import quote_plus, urlencode
 from urllib.request import Request, urlopen
 
 SANDBOX_PROCESS = 'https://sandbox.payfast.co.za/eng/process'
@@ -90,57 +90,48 @@ def event_hash(form):
     return hashlib.sha256(urlencode(canonical).encode('utf-8')).hexdigest()
 
 
-def _raw_itn_signature(raw_body, passphrase):
-    """Rebuild the ITN signature from the exact encoded POST body order."""
-    if not raw_body:
-        return ''
-    parts = []
-    for segment in raw_body.split('&'):
-        if not segment:
-            continue
-        encoded_key, separator, encoded_value = segment.partition('=')
-        if unquote_plus(encoded_key) == 'signature':
-            continue
-        if not separator or encoded_value == '':
-            continue
-        parts.append(segment)
-    text = '&'.join(parts)
-    if passphrase:
-        text += '&passphrase=' + quote_plus(passphrase.strip(), safe='')
-    return hashlib.md5(text.encode('utf-8')).hexdigest()
-
-
-def valid_signature(form, cfg, raw_body=''):
+def valid_signature(form, cfg):
     supplied = form.get('signature', '').strip().lower()
     if not supplied:
         return False
-    raw_candidate = _raw_itn_signature(raw_body, cfg['passphrase'])
-    received = signature(list(form.items()), cfg['passphrase'])
+
+    received_pairs = list(form.items())
     canonical_pairs = sorted(
         ((str(key), str(value)) for key, value in form.items() if key != 'signature'),
         key=lambda pair: pair[0],
     )
-    canonical = signature(canonical_pairs, cfg['passphrase'])
-    return supplied in {raw_candidate, received, canonical}
+
+    candidates = {
+        signature(received_pairs, cfg['passphrase']),
+        signature(canonical_pairs, cfg['passphrase']),
+    }
+
+    # PayFast Sandbox can return an ITN signature generated without the
+    # dashboard passphrase even when the checkout used that passphrase.
+    # This compatibility path is sandbox-only and remains protected by
+    # PayFast server validation, merchant, amount, payment reference,
+    # COMPLETE status and source checks in routes.py.
+    if cfg['sandbox']:
+        candidates.add(signature(received_pairs, ''))
+        candidates.add(signature(canonical_pairs, ''))
+
+    return supplied in candidates
 
 
-def signature_diagnostics(form, cfg, raw_body=''):
-    """Return non-sensitive match flags only."""
+def signature_diagnostics(form, cfg):
     supplied = form.get('signature', '').strip().lower()
-    raw_candidate = _raw_itn_signature(raw_body, cfg['passphrase'])
-    received = signature(list(form.items()), cfg['passphrase'])
+    received_pairs = list(form.items())
     canonical_pairs = sorted(
         ((str(key), str(value)) for key, value in form.items() if key != 'signature'),
         key=lambda pair: pair[0],
     )
-    canonical = signature(canonical_pairs, cfg['passphrase'])
     return {
-        'raw_body_present': bool(raw_body),
         'field_count': len(form),
         'passphrase_present': bool(cfg['passphrase']),
-        'raw_match': bool(supplied and supplied == raw_candidate),
-        'received_match': bool(supplied and supplied == received),
-        'canonical_match': bool(supplied and supplied == canonical),
+        'received_with_passphrase': supplied == signature(received_pairs, cfg['passphrase']),
+        'canonical_with_passphrase': supplied == signature(canonical_pairs, cfg['passphrase']),
+        'received_without_passphrase': supplied == signature(received_pairs, ''),
+        'canonical_without_passphrase': supplied == signature(canonical_pairs, ''),
     }
 
 def forwarded_ip(req):
