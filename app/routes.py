@@ -6,7 +6,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import desc
 from . import db
 from .payfast import config as payfast_config,build_checkout,event_hash,valid_signature,valid_source,server_validate,forwarded_ip
-from .models import Customer,User,Site,Asset,Device,SignalDefinition,Reading,Alarm,Location,WorkspaceProfile,SubscriptionPlan,Subscription,PaymentRecord,PayFastEvent,SubscriptionAuditEvent
+from .models import Customer,User,Site,Asset,Device,SignalDefinition,Reading,Alarm,Location,WorkspaceProfile,SubscriptionPlan,Subscription,PaymentRecord,PayFastEvent,SubscriptionAuditEvent,IntegrationConnector,IntegrationSignalMapping,IntegrationEvent
 bp=Blueprint('main',__name__)
 
 def utcnow(): return datetime.now(timezone.utc)
@@ -311,6 +311,148 @@ def toggle_device(device_id):
         'ok',
     )
     return redirect(url_for('main.devices'))
+
+
+CONNECTOR_TYPES={
+    'MQTT':{'label':'MQTT Broker','mode':'CLOUD_OR_EDGE','endpoint':'mqtts://broker.example:8883','implemented':'FOUNDATION'},
+    'REST_API':{'label':'REST API','mode':'CLOUD_PULL','endpoint':'https://provider.example/api','implemented':'FOUNDATION'},
+    'WEBHOOK':{'label':'Webhook','mode':'CLOUD_PUSH','endpoint':'Generated after save','implemented':'FOUNDATION'},
+    'OPC_UA':{'label':'OPC UA','mode':'EDGE_OUTBOUND','endpoint':'opc.tcp://server:4840','implemented':'EDGE_REQUIRED'},
+    'OPC_CLASSIC':{'label':'OPC Classic','mode':'EDGE_OUTBOUND','endpoint':'Local OPC DA server','implemented':'EDGE_REQUIRED'},
+    'MODBUS_TCP':{'label':'Modbus TCP','mode':'EDGE_OUTBOUND','endpoint':'192.168.1.20:502','implemented':'EDGE_REQUIRED'},
+    'MODBUS_RTU':{'label':'Modbus RTU','mode':'EDGE_OUTBOUND','endpoint':'COM3 / 9600 / 8N1','implemented':'EDGE_REQUIRED'},
+    'SQL_ODBC':{'label':'SQL / ODBC','mode':'EDGE_OUTBOUND','endpoint':'Read-only DSN','implemented':'EDGE_REQUIRED'},
+    'CSV_IMPORT':{'label':'CSV Import','mode':'EDGE_OR_UPLOAD','endpoint':'Folder or upload profile','implemented':'FOUNDATION'},
+    'ASSETTRACK_API':{'label':'AssetTrack Device API','mode':'CLOUD_PUSH','endpoint':'/api/v1/ingest','implemented':'AVAILABLE'},
+}
+
+
+def connector_for_tenant(connector_id):
+    return IntegrationConnector.query.filter_by(
+        id=connector_id,
+        customer_id=tenant_id(),
+    ).first_or_404()
+
+
+@bp.get('/integrations')
+@login_required
+def integrations():
+    connectors=IntegrationConnector.query.filter_by(customer_id=tenant_id()).order_by(IntegrationConnector.name).all()
+    totals={
+        'all':len(connectors),
+        'enabled':sum(1 for c in connectors if c.enabled),
+        'healthy':sum(1 for c in connectors if c.status=='CONNECTED'),
+        'attention':sum(1 for c in connectors if c.status in ('ERROR','DEGRADED')),
+        'mappings':IntegrationSignalMapping.query.filter_by(customer_id=tenant_id()).count(),
+    }
+    return render_template('integrations.html',connectors=connectors,totals=totals,connector_types=CONNECTOR_TYPES)
+
+
+@bp.route('/integrations/new',methods=['GET','POST'])
+@login_required
+def integration_new():
+    if request.method=='POST':
+        connector_type=request.form.get('connector_type','').strip().upper()
+        name=request.form.get('name','').strip()
+        if connector_type not in CONNECTOR_TYPES or len(name)<2:
+            flash('Select a valid connector type and enter a name.','error')
+            return redirect(url_for('main.integration_new'))
+        if IntegrationConnector.query.filter_by(customer_id=tenant_id(),name=name).first():
+            flash('An integration with this name already exists.','error')
+            return redirect(url_for('main.integration_new'))
+        spec=CONNECTOR_TYPES[connector_type]
+        connector=IntegrationConnector(
+            customer_id=tenant_id(),name=name,connector_type=connector_type,
+            transport_mode=spec['mode'],endpoint=request.form.get('endpoint','').strip(),
+            edge_gateway_id=request.form.get('edge_gateway_id','').strip() or None,
+            credential_ref=request.form.get('credential_ref','').strip() or None,
+            read_only=True,enabled=False,status='DRAFT',
+            poll_interval_seconds=max(5,int(request.form.get('poll_interval_seconds') or 60)),
+            config_json={'implementation_state':spec['implemented']},
+        )
+        db.session.add(connector);db.session.flush()
+        db.session.add(IntegrationEvent(customer_id=tenant_id(),connector_id=connector.id,event_type='CREATED',status='OK',detail=f'{connector_type} connector created in read-only mode'))
+        db.session.commit();flash('Integration created. Configure mappings before enabling.','ok')
+        return redirect(url_for('main.integration_detail',connector_id=connector.id))
+    return render_template('integration_new.html',connector_types=CONNECTOR_TYPES)
+
+
+@bp.get('/integrations/<int:connector_id>')
+@login_required
+def integration_detail(connector_id):
+    connector=connector_for_tenant(connector_id)
+    mappings=IntegrationSignalMapping.query.filter_by(customer_id=tenant_id(),connector_id=connector.id).order_by(IntegrationSignalMapping.source_point).all()
+    events=IntegrationEvent.query.filter_by(customer_id=tenant_id(),connector_id=connector.id).order_by(desc(IntegrationEvent.created_at)).limit(20).all()
+    assets=Asset.query.filter_by(customer_id=tenant_id()).order_by(Asset.name).all()
+    return render_template('integration_detail.html',connector=connector,mappings=mappings,events=events,assets=assets,connector_spec=CONNECTOR_TYPES[connector.connector_type])
+
+
+@bp.post('/integrations/<int:connector_id>/test')
+@login_required
+def integration_test(connector_id):
+    connector=connector_for_tenant(connector_id);connector.last_tested_at=utcnow()
+    failures=[]
+    if connector.connector_type not in ('WEBHOOK','ASSETTRACK_API') and not connector.endpoint:failures.append('endpoint missing')
+    if connector.connector_type in ('OPC_UA','OPC_CLASSIC','MODBUS_TCP','MODBUS_RTU','SQL_ODBC') and not connector.edge_gateway_id:failures.append('edge gateway not assigned')
+    if connector.connector_type in ('MQTT','REST_API','SQL_ODBC') and not connector.credential_ref:failures.append('credential reference missing')
+    if failures:
+        connector.status='ERROR';connector.last_error='; '.join(failures);status='FAILED';detail=connector.last_error
+        flash('Configuration test failed: '+detail,'error')
+    else:
+        connector.status='CONFIGURED';connector.last_error=None;status='OK';detail='Configuration is complete. Protocol execution is enabled in the connector-specific REV19 build.'
+        flash('Configuration validation passed.','ok')
+    db.session.add(IntegrationEvent(customer_id=tenant_id(),connector_id=connector.id,event_type='CONFIG_TEST',status=status,detail=detail));db.session.commit()
+    return redirect(url_for('main.integration_detail',connector_id=connector.id))
+
+
+@bp.post('/integrations/<int:connector_id>/toggle')
+@login_required
+def integration_toggle(connector_id):
+    connector=connector_for_tenant(connector_id)
+    if not connector.enabled and connector.status not in ('CONFIGURED','CONNECTED'):
+        flash('Run and pass the configuration test before enabling.','error')
+    else:
+        connector.enabled=not connector.enabled
+        db.session.add(IntegrationEvent(customer_id=tenant_id(),connector_id=connector.id,event_type='ENABLED' if connector.enabled else 'DISABLED',status='OK',detail='Connector state changed by customer administrator'))
+        db.session.commit();flash(f'Integration {"enabled" if connector.enabled else "disabled"}.','ok')
+    return redirect(url_for('main.integration_detail',connector_id=connector.id))
+
+
+@bp.post('/integrations/<int:connector_id>/mappings')
+@login_required
+def integration_mapping_add(connector_id):
+    connector=connector_for_tenant(connector_id)
+    asset=Asset.query.filter_by(id=request.form.get('asset_id',type=int),customer_id=tenant_id()).first_or_404()
+    signal=SignalDefinition.query.filter_by(id=request.form.get('signal_id',type=int),asset_id=asset.id,customer_id=tenant_id()).first_or_404()
+    source_point=request.form.get('source_point','').strip()
+    if not source_point:
+        flash('Source point or tag is required.','error');return redirect(url_for('main.integration_detail',connector_id=connector.id))
+    mapping=IntegrationSignalMapping(
+        customer_id=tenant_id(),connector_id=connector.id,asset_id=asset.id,signal_id=signal.id,
+        source_point=source_point,source_data_type=request.form.get('source_data_type','FLOAT'),
+        source_unit=request.form.get('source_unit','').strip(),scale=float(request.form.get('scale') or 1),
+        offset=float(request.form.get('offset') or 0),quality_mode=request.form.get('quality_mode','PASSTHROUGH'),enabled=True,
+    )
+    db.session.add(mapping);db.session.add(IntegrationEvent(customer_id=tenant_id(),connector_id=connector.id,event_type='MAPPING_ADDED',status='OK',detail=f'{source_point} mapped to {asset.name}.{signal.key}'))
+    try:db.session.commit();flash('Signal mapping added.','ok')
+    except Exception:db.session.rollback();flash('That source-to-signal mapping already exists.','error')
+    return redirect(url_for('main.integration_detail',connector_id=connector.id))
+
+
+@bp.post('/integrations/<int:connector_id>/mappings/<int:mapping_id>/toggle')
+@login_required
+def integration_mapping_toggle(connector_id,mapping_id):
+    connector=connector_for_tenant(connector_id)
+    mapping=IntegrationSignalMapping.query.filter_by(id=mapping_id,connector_id=connector.id,customer_id=tenant_id()).first_or_404()
+    mapping.enabled=not mapping.enabled;db.session.commit();flash('Signal mapping updated.','ok')
+    return redirect(url_for('main.integration_detail',connector_id=connector.id))
+
+
+@bp.get('/api/v1/assets/<int:asset_id>/signals')
+@login_required
+def integration_asset_signals(asset_id):
+    asset=Asset.query.filter_by(id=asset_id,customer_id=tenant_id()).first_or_404()
+    return jsonify(signals=[{'id':s.id,'key':s.key,'label':s.label,'unit':s.unit} for s in SignalDefinition.query.filter_by(asset_id=asset.id,enabled=True).order_by(SignalDefinition.label)])
 
 
 @bp.get('/subscription-required')
