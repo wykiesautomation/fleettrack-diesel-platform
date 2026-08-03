@@ -6,7 +6,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import desc
 from . import db
 from .payfast import config as payfast_config,build_checkout,event_hash,valid_signature,valid_source,server_validate,forwarded_ip
-from .models import Customer,User,Site,Asset,Device,SignalDefinition,Reading,Alarm,Location,WorkspaceProfile,SubscriptionPlan,Subscription,PaymentRecord,PayFastEvent,SubscriptionAuditEvent,IntegrationConnector,IntegrationSignalMapping,IntegrationEvent
+from .models import Customer,User,Site,Asset,Device,SignalDefinition,Reading,Alarm,Location,WorkspaceProfile,SubscriptionPlan,Subscription,PaymentRecord,PayFastEvent,SubscriptionAuditEvent,IntegrationConnector,IntegrationSignalMapping,IntegrationEvent,MqttSubscription,MqttTopicMapping,MqttMessageEvent
 bp=Blueprint('main',__name__)
 
 def utcnow(): return datetime.now(timezone.utc)
@@ -455,6 +455,42 @@ def integration_asset_signals(asset_id):
     return jsonify(signals=[{'id':s.id,'key':s.key,'label':s.label,'unit':s.unit} for s in SignalDefinition.query.filter_by(asset_id=asset.id,enabled=True).order_by(SignalDefinition.label)])
 
 
+@bp.route('/integrations/<int:connector_id>/mqtt',methods=['GET','POST'])
+@login_required
+def mqtt_connector(connector_id):
+    connector=connector_for_tenant(connector_id)
+    if connector.connector_type!='MQTT':abort(404)
+    cfg=dict(connector.config_json or {})
+    if request.method=='POST':
+        connector.endpoint=request.form.get('endpoint','').strip();connector.poll_interval_seconds=max(5,int(request.form.get('refresh_seconds') or 15))
+        cfg.update({'client_id':request.form.get('client_id','').strip(),'username_env':request.form.get('username_env','').strip(),'password_env':request.form.get('password_env','').strip(),'ca_file_env':request.form.get('ca_file_env','').strip()})
+        connector.config_json=cfg;connector.status='CONFIGURED';connector.last_error=None;db.session.add(IntegrationEvent(customer_id=tenant_id(),connector_id=connector.id,event_type='MQTT_CONFIGURED',status='OK',detail='Broker settings updated with environment-variable secret references'));db.session.commit();flash('MQTT broker settings saved.','ok');return redirect(url_for('main.mqtt_connector',connector_id=connector.id))
+    return render_template('mqtt_connector.html',connector=connector,cfg=cfg,subscriptions=MqttSubscription.query.filter_by(customer_id=tenant_id(),connector_id=connector.id).order_by(MqttSubscription.topic_filter).all(),mappings=MqttTopicMapping.query.filter_by(customer_id=tenant_id(),connector_id=connector.id).order_by(MqttTopicMapping.id).all(),events=MqttMessageEvent.query.filter_by(customer_id=tenant_id(),connector_id=connector.id).order_by(desc(MqttMessageEvent.received_at)).limit(30).all(),assets=Asset.query.filter_by(customer_id=tenant_id()).order_by(Asset.name).all())
+@bp.post('/integrations/<int:connector_id>/mqtt/subscriptions')
+@login_required
+def mqtt_subscription_add(connector_id):
+    connector=connector_for_tenant(connector_id);topic=request.form.get('topic_filter','').strip();qos=request.form.get('qos',type=int)
+    if connector.connector_type!='MQTT' or not topic or qos not in (0,1,2):flash('Valid topic and QoS required.','error');return redirect(url_for('main.mqtt_connector',connector_id=connector.id))
+    db.session.add(MqttSubscription(customer_id=tenant_id(),connector_id=connector.id,topic_filter=topic,qos=qos,enabled=True))
+    try:db.session.commit();flash('Subscription added.','ok')
+    except Exception:db.session.rollback();flash('Topic filter already exists.','error')
+    return redirect(url_for('main.mqtt_connector',connector_id=connector.id))
+@bp.post('/integrations/<int:connector_id>/mqtt/subscriptions/<int:subscription_id>/toggle')
+@login_required
+def mqtt_subscription_toggle(connector_id,subscription_id):
+    connector=connector_for_tenant(connector_id);sub=MqttSubscription.query.filter_by(id=subscription_id,connector_id=connector.id,customer_id=tenant_id()).first_or_404();sub.enabled=not sub.enabled;db.session.commit();return redirect(url_for('main.mqtt_connector',connector_id=connector.id))
+@bp.post('/integrations/<int:connector_id>/mqtt/mappings')
+@login_required
+def mqtt_mapping_add(connector_id):
+    connector=connector_for_tenant(connector_id);sub=MqttSubscription.query.filter_by(id=request.form.get('subscription_id',type=int),connector_id=connector.id,customer_id=tenant_id()).first_or_404();asset=Asset.query.filter_by(id=request.form.get('asset_id',type=int),customer_id=tenant_id()).first_or_404();signal=SignalDefinition.query.filter_by(id=request.form.get('signal_id',type=int),asset_id=asset.id,customer_id=tenant_id()).first_or_404()
+    db.session.add(MqttTopicMapping(customer_id=tenant_id(),connector_id=connector.id,subscription_id=sub.id,asset_id=asset.id,signal_id=signal.id,json_path=request.form.get('json_path','value').strip() or 'value',timestamp_path=request.form.get('timestamp_path','').strip() or None,quality_path=request.form.get('quality_path','').strip() or None,scale=float(request.form.get('scale') or 1),offset=float(request.form.get('offset') or 0),enabled=True))
+    try:db.session.commit();flash('MQTT mapping added.','ok')
+    except Exception:db.session.rollback();flash('Mapping already exists.','error')
+    return redirect(url_for('main.mqtt_connector',connector_id=connector.id))
+@bp.post('/integrations/<int:connector_id>/mqtt/mappings/<int:mapping_id>/toggle')
+@login_required
+def mqtt_mapping_toggle(connector_id,mapping_id):
+    connector=connector_for_tenant(connector_id);mapping=MqttTopicMapping.query.filter_by(id=mapping_id,connector_id=connector.id,customer_id=tenant_id()).first_or_404();mapping.enabled=not mapping.enabled;db.session.commit();return redirect(url_for('main.mqtt_connector',connector_id=connector.id))
 @bp.get('/subscription-required')
 @login_required
 def subscription_required():

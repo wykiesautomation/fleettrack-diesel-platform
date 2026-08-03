@@ -166,3 +166,35 @@ class IntegrationEvent(db.Model):
     status=db.Column(db.String(20),nullable=False)
     detail=db.Column(db.String(500))
     created_at=db.Column(db.DateTime(timezone=True),default=now,nullable=False)
+
+class MqttSubscription(db.Model):
+    id=db.Column(db.Integer,primary_key=True)
+    customer_id=db.Column(db.Integer,db.ForeignKey('customer.id'),nullable=False,index=True)
+    connector_id=db.Column(db.Integer,db.ForeignKey('integration_connector.id'),nullable=False,index=True)
+    topic_filter=db.Column(db.String(300),nullable=False)
+    qos=db.Column(db.Integer,default=1,nullable=False)
+    enabled=db.Column(db.Boolean,default=True,nullable=False)
+    created_at=db.Column(db.DateTime(timezone=True),default=now,nullable=False)
+    __table_args__=(db.UniqueConstraint('connector_id','topic_filter',name='uq_mqtt_connector_topic'),)
+
+class MqttTopicMapping(db.Model):
+    id=db.Column(db.Integer,primary_key=True)
+    customer_id=db.Column(db.Integer,db.ForeignKey('customer.id'),nullable=False,index=True)
+    connector_id=db.Column(db.Integer,db.ForeignKey('integration_connector.id'),nullable=False,index=True)
+    subscription_id=db.Column(db.Integer,db.ForeignKey('mqtt_subscription.id'),nullable=False,index=True)
+    asset_id=db.Column(db.Integer,db.ForeignKey('asset.id'),nullable=False,index=True)
+    signal_id=db.Column(db.Integer,db.ForeignKey('signal_definition.id'),nullable=False,index=True)
+    json_path=db.Column(db.String(240),default='value',nullable=False)
+    timestamp_path=db.Column(db.String(240)); quality_path=db.Column(db.String(240))
+    scale=db.Column(db.Float,default=1.0,nullable=False); offset=db.Column(db.Float,default=0.0,nullable=False)
+    enabled=db.Column(db.Boolean,default=True,nullable=False)
+    last_value=db.Column(db.Float); last_quality=db.Column(db.String(20)); last_message_at=db.Column(db.DateTime(timezone=True)); last_error=db.Column(db.String(500))
+    created_at=db.Column(db.DateTime(timezone=True),default=now,nullable=False); updated_at=db.Column(db.DateTime(timezone=True),default=now,onupdate=now,nullable=False)
+    connector=db.relationship('IntegrationConnector'); subscription=db.relationship('MqttSubscription'); asset=db.relationship('Asset'); signal=db.relationship('SignalDefinition')
+    __table_args__=(db.UniqueConstraint('subscription_id','signal_id','json_path',name='uq_mqtt_topic_signal_path'),)
+
+class MqttMessageEvent(db.Model):
+    id=db.Column(db.BigInteger,primary_key=True)
+    customer_id=db.Column(db.Integer,nullable=False,index=True); connector_id=db.Column(db.Integer,nullable=False,index=True)
+    topic=db.Column(db.String(300),nullable=False,index=True); payload_size=db.Column(db.Integer,default=0,nullable=False); mapped_points=db.Column(db.Integer,default=0,nullable=False)
+    status=db.Column(db.String(20),nullable=False); detail=db.Column(db.String(500)); received_at=db.Column(db.DateTime(timezone=True),default=now,nullable=False,index=True)
