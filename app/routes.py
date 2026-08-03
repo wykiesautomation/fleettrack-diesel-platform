@@ -202,6 +202,117 @@ def device(asset_id):
 def acknowledge_alarm(alarm_id):
     a=Alarm.query.filter_by(id=alarm_id,customer_id=tenant_id()).first_or_404();a.state='ACKNOWLEDGED';a.acknowledged_at=utcnow();a.acknowledged_by=current_user.id;a.note=request.form.get('note');db.session.commit();return redirect(request.referrer or url_for('main.dashboard'))
 
+@bp.route('/account', methods=['GET', 'POST'])
+@login_required
+def account():
+    customer = Customer.query.filter_by(id=tenant_id()).first_or_404()
+    profile = WorkspaceProfile.query.filter_by(customer_id=tenant_id()).first()
+    if not profile:
+        profile = WorkspaceProfile(
+            customer_id=tenant_id(),
+            contact_email=current_user.email,
+            billing_email=current_user.email,
+        )
+        db.session.add(profile)
+        db.session.commit()
+
+    if request.method == 'POST':
+        company_name = request.form.get('company_name', '').strip()
+        user_name = request.form.get('user_name', '').strip()
+        if len(company_name) < 2 or len(user_name) < 2:
+            flash('Company and administrator names are required.', 'error')
+            return redirect(url_for('main.account'))
+        customer.name = company_name
+        current_user.name = user_name
+        profile.contact_email = request.form.get('contact_email', '').strip().lower()
+        profile.contact_phone = request.form.get('contact_phone', '').strip()
+        profile.billing_email = request.form.get('billing_email', '').strip().lower()
+        profile.address = request.form.get('address', '').strip()
+        db.session.commit()
+        flash('Account settings updated.', 'ok')
+        return redirect(url_for('main.account'))
+
+    users = User.query.filter_by(customer_id=tenant_id()).order_by(User.name).all()
+    subscription = Subscription.query.filter_by(customer_id=tenant_id()).first()
+    return render_template(
+        'account.html',
+        customer=customer,
+        profile=profile,
+        users=users,
+        subscription=subscription,
+    )
+
+
+@bp.get('/devices')
+@login_required
+def devices():
+    records = Device.query.filter_by(customer_id=tenant_id()).order_by(Device.device_uid).all()
+    now = utcnow()
+    items = []
+    for record in records:
+        online = bool(
+            record.active
+            and record.last_seen
+            and now - aware(record.last_seen) <= timedelta(minutes=30)
+        )
+        last_contact = 'Never'
+        if record.last_seen:
+            age_seconds = max(0, int((now - aware(record.last_seen)).total_seconds()))
+            if age_seconds < 60:
+                last_contact = 'Just now'
+            elif age_seconds < 3600:
+                last_contact = f'{age_seconds // 60} min ago'
+            elif age_seconds < 86400:
+                last_contact = f'{age_seconds // 3600} h ago'
+            else:
+                last_contact = f'{age_seconds // 86400} d ago'
+        items.append({
+            'device': record,
+            'asset': record.asset,
+            'online': online,
+            'last_contact': last_contact,
+        })
+    new_token = session.pop('new_device_token', None)
+    new_token_device = session.pop('new_device_uid', None)
+    return render_template(
+        'devices.html',
+        items=items,
+        new_token=new_token,
+        new_token_device=new_token_device,
+    )
+
+
+@bp.post('/devices/<int:device_id>/rotate-token')
+@login_required
+def rotate_device_token(device_id):
+    record = Device.query.filter_by(
+        id=device_id,
+        customer_id=tenant_id(),
+    ).first_or_404()
+    record.api_token = secrets.token_urlsafe(32)
+    db.session.commit()
+    session['new_device_token'] = record.api_token
+    session['new_device_uid'] = record.device_uid
+    flash('Device token rotated. Copy the new token now.', 'ok')
+    return redirect(url_for('main.devices'))
+
+
+@bp.post('/devices/<int:device_id>/toggle')
+@login_required
+def toggle_device(device_id):
+    record = Device.query.filter_by(
+        id=device_id,
+        customer_id=tenant_id(),
+    ).first_or_404()
+    record.active = not record.active
+    db.session.commit()
+    flash(
+        f'Device {"enabled" if record.active else "disabled"}.',
+        'ok',
+    )
+    return redirect(url_for('main.devices'))
+
+
 @bp.get('/subscription-required')
 @login_required
 def subscription_required():
@@ -256,18 +367,6 @@ def payfast_notify():
     signature_ok = valid_signature(form, cfg)
     source_ok = valid_source(request, cfg)
     server_ok = server_validate(form, cfg)
-
-    # Sandbox-only compatibility gate. PayFast Sandbox has returned an ITN
-    # signature that does not match documented reconstruction variants, while
-    # its own server validation confirms the complete payload as VALID. Live
-    # mode never uses this override and still requires signature_ok=True.
-    sandbox_signature_override = bool(cfg['sandbox'] and server_ok)
-    effective_signature_ok = bool(signature_ok or sandbox_signature_override)
-    current_app.logger.warning(
-        "PayFast ITN signature gate mode=%s actual=%s sandbox_override=%s effective=%s",
-        cfg['mode'], signature_ok, sandbox_signature_override,
-        effective_signature_ok,
-    )
     try:
         amount = float(form.get('amount_gross') or 0)
     except (TypeError, ValueError):
@@ -277,13 +376,13 @@ def payfast_notify():
     complete_ok = form.get('payment_status') == 'COMPLETE'
     payment_ok = bool(payment)
     accepted = all([
-        payment_ok, effective_signature_ok, source_ok, server_ok,
+        payment_ok, signature_ok, source_ok, server_ok,
         amount_ok, merchant_ok, complete_ok,
     ])
     failures = [
         name for name, ok in (
             ('payment', payment_ok),
-            ('signature', effective_signature_ok),
+            ('signature', signature_ok),
             ('source', source_ok),
             ('server', server_ok),
             ('amount', amount_ok),
@@ -291,10 +390,10 @@ def payfast_notify():
             ('status', complete_ok),
         ) if not ok
     ]
-    reason = ('accepted:sandbox_server_validation_override' if accepted and sandbox_signature_override and not signature_ok else 'accepted') if accepted else 'failed:' + ','.join(failures)
+    reason = 'accepted' if accepted else 'failed:' + ','.join(failures)
     current_app.logger.warning(
         "PayFast ITN validation ref=%s accepted=%s payment=%s signature=%s source=%s server=%s amount=%s merchant=%s status=%s",
-        reference, accepted, payment_ok, effective_signature_ok, source_ok,
+        reference, accepted, payment_ok, signature_ok, source_ok,
         server_ok, amount_ok, merchant_ok, complete_ok,
     )
     db.session.add(PayFastEvent(
@@ -302,7 +401,7 @@ def payfast_notify():
         merchant_payment_id=reference,
         event_hash=digest,
         source_ip=forwarded_ip(request),
-        signature_valid=effective_signature_ok,
+        signature_valid=signature_ok,
         source_valid=source_ok,
         server_valid=server_ok,
         amount_valid=amount_ok,
