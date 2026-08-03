@@ -95,44 +95,14 @@ def valid_signature(form, cfg):
     if not supplied:
         return False
 
-    received_pairs = list(form.items())
+    received = signature(list(form.items()), cfg['passphrase'])
     canonical_pairs = sorted(
         ((str(key), str(value)) for key, value in form.items() if key != 'signature'),
         key=lambda pair: pair[0],
     )
+    canonical = signature(canonical_pairs, cfg['passphrase'])
+    return supplied in {received, canonical}
 
-    candidates = {
-        signature(received_pairs, cfg['passphrase']),
-        signature(canonical_pairs, cfg['passphrase']),
-    }
-
-    # PayFast Sandbox can return an ITN signature generated without the
-    # dashboard passphrase even when the checkout used that passphrase.
-    # This compatibility path is sandbox-only and remains protected by
-    # PayFast server validation, merchant, amount, payment reference,
-    # COMPLETE status and source checks in routes.py.
-    if cfg['sandbox']:
-        candidates.add(signature(received_pairs, ''))
-        candidates.add(signature(canonical_pairs, ''))
-
-    return supplied in candidates
-
-
-def signature_diagnostics(form, cfg):
-    supplied = form.get('signature', '').strip().lower()
-    received_pairs = list(form.items())
-    canonical_pairs = sorted(
-        ((str(key), str(value)) for key, value in form.items() if key != 'signature'),
-        key=lambda pair: pair[0],
-    )
-    return {
-        'field_count': len(form),
-        'passphrase_present': bool(cfg['passphrase']),
-        'received_with_passphrase': supplied == signature(received_pairs, cfg['passphrase']),
-        'canonical_with_passphrase': supplied == signature(canonical_pairs, cfg['passphrase']),
-        'received_without_passphrase': supplied == signature(received_pairs, ''),
-        'canonical_without_passphrase': supplied == signature(canonical_pairs, ''),
-    }
 
 def forwarded_ip(req):
     value = (
