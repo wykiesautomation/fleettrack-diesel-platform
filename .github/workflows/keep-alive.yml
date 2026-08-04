@@ -3,7 +3,6 @@ name: FleetTrack Keep Alive
 on:
   schedule:
     - cron: "7,17,27,37,47,57 * * * *"
-
   workflow_dispatch:
 
 jobs:
@@ -11,10 +10,35 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Ping FleetTrack health endpoint
+      - name: Wake FleetTrack and verify health
+        shell: bash
         run: |
-          curl --fail \
-            --silent \
-            --show-error \
-            --max-time 90 \
-            https://fleettrack-diesel-platform.onrender.com/health
+          URL="https://fleettrack-diesel-platform.onrender.com/health"
+
+          echo "Pinging: $URL"
+
+          for attempt in 1 2 3 4 5 6; do
+            HTTP_CODE=$(curl \
+              --location \
+              --silent \
+              --show-error \
+              --output response.txt \
+              --write-out "%{http_code}" \
+              --max-time 120 \
+              "$URL" || true)
+
+            echo "Attempt $attempt returned HTTP $HTTP_CODE"
+            cat response.txt || true
+            echo
+
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "FleetTrack is healthy."
+              exit 0
+            fi
+
+            echo "FleetTrack is waking up. Waiting 20 seconds..."
+            sleep 20
+          done
+
+          echo "FleetTrack did not return HTTP 200 after six attempts."
+          exit 1
