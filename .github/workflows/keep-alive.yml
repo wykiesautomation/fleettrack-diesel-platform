@@ -1,0 +1,20 @@
+name: FleetTrack Keep Alive
+
+on:
+  schedule:
+    - cron: "7,17,27,37,47,57 * * * *"
+
+  workflow_dispatch:
+
+jobs:
+  ping-fleettrack:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Ping FleetTrack health endpoint
+        run: |
+          curl --fail \
+            --silent \
+            --show-error \
+            --max-time 90 \
+            https://fleettrack-diesel-platform.onrender.com/health
