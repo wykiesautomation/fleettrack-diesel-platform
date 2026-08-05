@@ -1,12 +1,12 @@
-import secrets, re
+import os, secrets, re
 from datetime import datetime, timezone, timedelta
-from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify, abort, session, current_app
+from flask import Blueprint, Response, render_template, request, redirect, url_for, flash, jsonify, abort, session, current_app
 from flask_login import login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import desc
 from . import db
 from .payfast import config as payfast_config,build_checkout,event_hash,valid_signature,valid_source,server_validate,forwarded_ip
-from .models import Customer,User,Site,Asset,Device,SignalDefinition,Reading,Alarm,Location,WorkspaceProfile,SubscriptionPlan,Subscription,PaymentRecord,PayFastEvent,SubscriptionAuditEvent,IntegrationConnector,IntegrationSignalMapping,IntegrationEvent,ConnectorEndpointConfig,UniversalSourceMapping,WebhookReceipt,EdgeGateway,IntegrationJobEvent,MqttSubscription,MqttTopicMapping,MqttMessageEvent,DeviceConfiguration,DeviceCommand
+from .models import Customer,User,Site,Asset,Device,SignalDefinition,Reading,Alarm,Location,WorkspaceProfile,SubscriptionPlan,Subscription,PaymentRecord,PayFastEvent,SubscriptionAuditEvent,IntegrationConnector,IntegrationSignalMapping,IntegrationEvent,ConnectorEndpointConfig,UniversalSourceMapping,WebhookReceipt,EdgeGateway,IntegrationJobEvent,MqttSubscription,MqttTopicMapping,MqttMessageEvent
 bp=Blueprint('main',__name__)
 
 def utcnow(): return datetime.now(timezone.utc)
@@ -19,64 +19,6 @@ def parse_time(v):
 def aware(value):
     if not value:return None
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
-def clean_imei(value):
-    value=re.sub(r'\D','',str(value or ''));return value if len(value)==15 else ''
-def device_for_tenant(device_id):return Device.query.filter_by(id=device_id,customer_id=tenant_id()).first_or_404()
-def authenticated_device():
-    token=request.headers.get('Authorization','').removeprefix('Bearer ').strip()
-    return Device.query.filter_by(api_token=token,active=True).first() if token else None
-
-def device_config(record):
-    cfg=DeviceConfiguration.query.filter_by(device_id=record.id).first()
-    if not cfg:
-        cfg=DeviceConfiguration(customer_id=record.customer_id,device_id=record.id)
-        db.session.add(cfg);db.session.flush()
-    return cfg
-
-def validate_device_identity(record,payload):
-    reported_uid=str(payload.get('device_id','')).strip().upper()
-    if not reported_uid or reported_uid!=record.device_uid:
-        return jsonify(error='device_identity_mismatch'),403
-    reported_imei=clean_imei(payload.get('imei'))
-    if record.device_type in ('ESP32_SIM868','ESP32_LTE_CAT1') and not reported_imei:
-        return jsonify(error='imei_required'),400
-    if reported_imei:
-        record.reported_imei=reported_imei;record.identity_checked_at=utcnow();record.last_ip=request.remote_addr
-        if not record.expected_imei:
-            record.imei_status='PENDING_APPROVAL';record.device_state='WAITING';db.session.commit()
-            return jsonify(status='identity_pending',code='IMEI_APPROVAL_REQUIRED',reported_imei=reported_imei),409
-        if not secrets.compare_digest(record.expected_imei,reported_imei):
-            record.imei_status='MISMATCH';record.device_state='QUARANTINED';record.quarantine_reason='Reported IMEI does not match the approved modem';db.session.commit()
-            return jsonify(error='imei_mismatch',device_state='QUARANTINED'),403
-        record.imei_status='MATCHED';record.device_state='ONLINE';record.quarantine_reason=None
-    if record.device_state in ('SUSPENDED','QUARANTINED','TOKEN_REVOKED','RETIRED'):
-        db.session.commit();return jsonify(error='device_not_allowed',device_state=record.device_state),403
-    return None
-
-def store_device_sample(record,payload):
-    sampled=parse_time(payload.get('timestamp'));sequence=str(payload.get('sequence','')).strip()
-    if not sequence:return {'status':'rejected','error':'sequence_required','points':[]}
-    accepted=[];asset=record.asset
-    for item in payload.get('measurements',[]):
-        sig=SignalDefinition.query.filter_by(asset_id=asset.id,key=item.get('point'),enabled=True).first()
-        if not sig:continue
-        try:raw=float(item.get('value'));value=scale_signal(sig,raw)
-        except (TypeError,ValueError):continue
-        seq=f'{sequence}:{sig.key}'
-        if Reading.query.filter_by(signal_id=sig.id,sequence=seq).first():continue
-        db.session.add(Reading(customer_id=record.customer_id,asset_id=asset.id,signal_id=sig.id,sampled_at=sampled,value=value,raw_value=raw,unit=sig.unit,quality=item.get('quality','GOOD'),sequence=seq));evaluate_alarm(sig,value);accepted.append(sig.key)
-    loc=payload.get('location') or {}
-    if loc.get('latitude') is not None and loc.get('longitude') is not None:
-        loc_seq=f'{sequence}:location'
-        if not Location.query.filter_by(asset_id=asset.id,sequence=loc_seq).first():
-            try:
-                lat=float(loc['latitude']);lon=float(loc['longitude']);speed=float(loc.get('speed_kmh') or 0)
-                if -90<=lat<=90 and -180<=lon<=180 and 0<=speed<=250:
-                    db.session.add(Location(customer_id=record.customer_id,asset_id=asset.id,sampled_at=sampled,latitude=lat,longitude=lon,speed_kmh=speed,accuracy_m=loc.get('accuracy_m'),heading=loc.get('heading'),sequence=loc_seq))
-            except (TypeError,ValueError):pass
-    record.last_seen=utcnow();asset.last_seen=utcnow();record.firmware=payload.get('firmware',record.firmware)
-    if record.device_state=='WAITING':record.device_state='ONLINE'
-    return {'status':'accepted','sequence':sequence,'points':accepted}
 def latest_reading(signal_id):
     return Reading.query.filter_by(signal_id=signal_id).order_by(desc(Reading.sampled_at)).first()
 def asset_status(asset):
@@ -127,6 +69,58 @@ def enforce_subscription_access():
 
 @bp.get('/health')
 def health(): return {'status':'ok','service':'assettrack360-rev17'}
+
+@bp.get("/robots.txt")
+def robots_txt():
+    base_url=os.getenv("PUBLIC_BASE_URL","https://fleettrack.wykiesautomation.co.za").rstrip("/")
+    body=(
+        "User-agent: *\n"
+        "Allow: /\n"
+        "Disallow: /dashboard\n"
+        "Disallow: /asset/\n"
+        "Disallow: /devices\n"
+        "Disallow: /account\n"
+        "Disallow: /billing\n"
+        "Disallow: /integrations\n"
+        "Disallow: /edge-gateways\n"
+        "Disallow: /api/\n"
+        "Disallow: /onboarding\n\n"
+        f"Sitemap: {base_url}/sitemap.xml\n"
+    )
+    return Response(body,mimetype="text/plain")
+
+@bp.get("/sitemap.xml")
+def sitemap_xml():
+    base_url=os.getenv("PUBLIC_BASE_URL","https://fleettrack.wykiesautomation.co.za").rstrip("/")
+    last_modified=datetime.now(timezone.utc).date().isoformat()
+    pages=(("/","daily","1.0"),("/register","weekly","0.9"),("/login","monthly","0.5"),("/plans","weekly","0.8"))
+    entries=[]
+    for path,change_frequency,priority in pages:
+        entries.append(
+            "  <url>\n"
+            f"    <loc>{base_url}{path}</loc>\n"
+            f"    <lastmod>{last_modified}</lastmod>\n"
+            f"    <changefreq>{change_frequency}</changefreq>\n"
+            f"    <priority>{priority}</priority>\n"
+            "  </url>"
+        )
+    xml='<?xml version="1.0" encoding="UTF-8"?>\n'
+    xml+='<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+    xml+="\n".join(entries)
+    xml+="\n</urlset>\n"
+    return Response(xml,mimetype="application/xml")
+
+@bp.get("/site.webmanifest")
+def site_webmanifest():
+    return jsonify(
+        name="AssetTrack 360",
+        short_name="AssetTrack 360",
+        description="Secure fleet, diesel, tank and connected-asset monitoring.",
+        start_url="/",
+        display="standalone",
+        background_color="#061622",
+        theme_color="#083344",
+    )
 
 @bp.route('/register',methods=['GET','POST'])
 def register():
@@ -250,27 +244,11 @@ def signals(asset_id):
 @bp.route('/asset/<int:asset_id>/device',methods=['GET','POST'])
 @login_required
 def device(asset_id):
- asset=Asset.query.filter_by(id=asset_id,customer_id=tenant_id()).first_or_404();d=Device.query.filter_by(asset_id=asset.id,active=True).first();new_token=None
- if request.method=='POST' and not d:
-  uid=request.form.get('device_uid','').strip().upper();expected=clean_imei(request.form.get('expected_imei'));mode=request.form.get('imei_binding_mode','FIRST_CONTACT')
-  if len(uid)<5 or Device.query.filter_by(device_uid=uid).first():flash('Invalid or duplicate Device UID.','error');return redirect(url_for('main.device',asset_id=asset.id))
-  if mode=='MANUAL' and not expected:flash('Enter a valid 15-digit IMEI.','error');return redirect(url_for('main.device',asset_id=asset.id))
-  new_token=secrets.token_urlsafe(32);d=Device(customer_id=tenant_id(),asset_id=asset.id,device_uid=uid,device_type=request.form.get('device_type','UNIVERSAL'),api_token=new_token,capabilities=[],expected_imei=expected or None,imei_status='MATCHED' if expected else 'NOT_BOUND',device_state='WAITING');db.session.add(d);db.session.commit();flash('Device registered. Copy the token now.','ok')
- return render_template('device.html',asset=asset,device=d,new_token=new_token)
-@bp.post('/devices/<int:device_id>/approve-imei')
-@login_required
-def approve_device_imei(device_id):
- d=device_for_tenant(device_id);imei=clean_imei(d.reported_imei)
- if not imei:flash('No valid reported IMEI.','error');return redirect(url_for('main.device',asset_id=d.asset_id))
- d.expected_imei=imei;d.imei_status='MATCHED';d.device_state='WAITING';d.imei_bound_at=utcnow();d.quarantine_reason=None;db.session.commit();return redirect(url_for('main.device',asset_id=d.asset_id))
-@bp.post('/devices/<int:device_id>/reject-imei')
-@login_required
-def reject_device_imei(device_id):
- d=device_for_tenant(device_id);d.imei_status='MISMATCH';d.device_state='QUARANTINED';d.quarantine_reason='Reported IMEI rejected by administrator';db.session.commit();return redirect(url_for('main.device',asset_id=d.asset_id))
-@bp.post('/devices/<int:device_id>/clear-imei')
-@login_required
-def clear_device_imei(device_id):
- d=device_for_tenant(device_id);d.expected_imei=None;d.reported_imei=None;d.imei_status='NOT_BOUND';d.device_state='WAITING';d.quarantine_reason=None;db.session.commit();return redirect(url_for('main.device',asset_id=d.asset_id))
+    asset=Asset.query.filter_by(id=asset_id,customer_id=tenant_id()).first_or_404();d=Device.query.filter_by(asset_id=asset.id,active=True).first()
+    if request.method=='POST' and not d:
+        d=Device(customer_id=tenant_id(),asset_id=asset.id,device_uid=request.form['device_uid'],device_type=request.form.get('device_type','UNIVERSAL'),api_token=secrets.token_urlsafe(32),capabilities=[]);db.session.add(d);db.session.commit();flash('Device registered. Copy the token now.','ok')
+    return render_template('device.html',asset=asset,device=d)
+
 @bp.post('/alarm/<int:alarm_id>/ack')
 @login_required
 def acknowledge_alarm(alarm_id):
@@ -723,104 +701,25 @@ def payfast_notify():
 
 @bp.post('/api/v1/ingest')
 def ingest():
-    device=authenticated_device()
-    if not device:return jsonify(error='invalid_device_token'),401
+    token=request.headers.get('Authorization','').removeprefix('Bearer ').strip();device=Device.query.filter_by(api_token=token,active=True).first()
+    if not device:return jsonify(error='unauthorized'),401
     allowed,subscription=entitlement_for(device.customer_id)
     if not allowed:return jsonify(error='subscription_inactive',state=subscription.state if subscription else 'MISSING',billing_url='/billing'),402
     payload=request.get_json(silent=True) or {}
-    identity_error=validate_device_identity(device,payload)
-    if identity_error:return identity_error
-    result=store_device_sample(device,payload)
-    if result.get('status')=='rejected':return jsonify(result),400
-    db.session.commit();return jsonify(**result,imei_verified=device.imei_status=='MATCHED'),202
-
-@bp.post('/api/v1/ingest/batch')
-def ingest_batch():
-    device=authenticated_device()
-    if not device:return jsonify(error='invalid_device_token'),401
-    allowed,subscription=entitlement_for(device.customer_id)
-    if not allowed:return jsonify(error='subscription_inactive',state=subscription.state if subscription else 'MISSING',billing_url='/billing'),402
-    body=request.get_json(silent=True) or {};samples=body.get('samples') or []
-    if not isinstance(samples,list) or not samples or len(samples)>100:return jsonify(error='invalid_batch',max_samples=100),400
-    identity_payload={'device_id':body.get('device_id'),'imei':body.get('imei')}
-    identity_error=validate_device_identity(device,identity_payload)
-    if identity_error:return identity_error
-    results=[]
-    for sample in samples:
-        sample=dict(sample or {});sample['device_id']=device.device_uid;sample['imei']=device.reported_imei
-        results.append(store_device_sample(device,sample))
-    db.session.commit()
-    accepted=sum(1 for x in results if x.get('status')=='accepted')
-    return jsonify(status='batch_processed',accepted=accepted,rejected=len(results)-accepted,results=results),202
-
-@bp.get('/api/v1/device/config')
-def get_device_configuration():
-    device=authenticated_device()
-    if not device:return jsonify(error='invalid_device_token'),401
-    identity_error=validate_device_identity(device,request.args)
-    if identity_error:return identity_error
-    cfg=device_config(device)
-    pending=DeviceCommand.query.filter_by(device_id=device.id,status='PENDING').order_by(DeviceCommand.id).limit(20).all()
-    now=utcnow()
-    for command in pending:command.status='DELIVERED';command.delivered_at=now
-    db.session.commit()
-    return jsonify(status='ok',configuration={
-        'revision':cfg.revision,'tank_capacity_l':cfg.tank_capacity_l,'tank_height_mm':cfg.tank_height_mm,
-        'tank_shape':cfg.tank_shape,'empty_ma':cfg.empty_ma,'full_ma':cfg.full_ma,
-        'low_alarm_percent':cfg.low_alarm_percent,'critical_alarm_percent':cfg.critical_alarm_percent,
-        'rapid_drop_percent':cfg.rapid_drop_percent,'moving_interval_seconds':cfg.moving_interval_seconds,
-        'parked_interval_seconds':cfg.parked_interval_seconds,'calibration_points':cfg.calibration_points or []},
-        commands=[{'id':x.id,'type':x.command_type,'payload':x.payload or {}} for x in pending])
-
-@bp.post('/api/v1/device/config/ack')
-def acknowledge_device_configuration():
-    device=authenticated_device()
-    if not device:return jsonify(error='invalid_device_token'),401
-    data=request.get_json(silent=True) or {};identity_error=validate_device_identity(device,data)
-    if identity_error:return identity_error
-    cfg=device_config(device);revision=int(data.get('revision') or 0);status=str(data.get('status','')).upper()
-    if status not in ('APPLIED','REJECTED') or revision<=0:return jsonify(error='invalid_acknowledgement'),400
-    cfg.applied_revision=revision;cfg.apply_status=status;cfg.apply_detail=str(data.get('detail',''))[:240];cfg.acknowledged_at=utcnow()
-    for item in data.get('commands') or []:
-        command=DeviceCommand.query.filter_by(id=item.get('id'),device_id=device.id).first()
-        if command:
-            command.status=str(item.get('status','REJECTED')).upper();command.result_detail=str(item.get('detail',''))[:240];command.acknowledged_at=utcnow()
-    db.session.commit();return jsonify(status='acknowledged',revision=revision,apply_status=status)
-
-@bp.route('/devices/<int:device_id>/configuration',methods=['GET','POST'])
-@login_required
-def configure_device(device_id):
-    device=device_for_tenant(device_id);cfg=device_config(device)
-    if request.method=='POST':
-        try:
-            capacity=float(request.form.get('tank_capacity_l') or 0);height=float(request.form.get('tank_height_mm') or 0)
-            empty_ma=float(request.form.get('empty_ma') or 4);full_ma=float(request.form.get('full_ma') or 20)
-            low=float(request.form.get('low_alarm_percent') or 20);critical=float(request.form.get('critical_alarm_percent') or 10)
-            if capacity<=0 or height<=0 or not 3.5<=empty_ma<full_ma<=21 or not 0<=critical<low<=100:raise ValueError
-        except ValueError:
-            flash('Invalid tank configuration or alarm limits.','error');return redirect(url_for('main.configure_device',device_id=device.id))
-        cfg.tank_capacity_l=capacity;cfg.tank_height_mm=height;cfg.tank_shape=request.form.get('tank_shape','RECTANGULAR')
-        cfg.empty_ma=empty_ma;cfg.full_ma=full_ma;cfg.low_alarm_percent=low;cfg.critical_alarm_percent=critical
-        cfg.rapid_drop_percent=float(request.form.get('rapid_drop_percent') or 5)
-        cfg.moving_interval_seconds=max(30,int(request.form.get('moving_interval_seconds') or 60))
-        cfg.parked_interval_seconds=max(60,int(request.form.get('parked_interval_seconds') or 600))
-        cfg.revision+=1;cfg.apply_status='PENDING';cfg.apply_detail=None
-        db.session.add(DeviceCommand(customer_id=device.customer_id,device_id=device.id,command_type='APPLY_CONFIGURATION',payload={'revision':cfg.revision}))
-        db.session.commit();flash('Configuration saved and queued for the device.','ok')
-        return redirect(url_for('main.configure_device',device_id=device.id))
-    return render_template('device_configuration.html',device=device,cfg=cfg)
-
-@bp.get('/api/v1/assets/<int:asset_id>/tracking')
-@login_required
-def tracking_history(asset_id):
-    asset=Asset.query.filter_by(id=asset_id,customer_id=tenant_id()).first_or_404()
-    start=parse_time(request.args.get('from')) if request.args.get('from') else utcnow()-timedelta(days=1)
-    end=parse_time(request.args.get('to')) if request.args.get('to') else utcnow()
-    limit=min(max(request.args.get('limit',type=int) or 2000,1),5000)
-    rows=Location.query.filter(Location.asset_id==asset.id,Location.customer_id==tenant_id(),Location.sampled_at>=start,Location.sampled_at<=end).order_by(Location.sampled_at).limit(limit).all()
-    points=[{'timestamp':aware(x.sampled_at).isoformat(),'latitude':x.latitude,'longitude':x.longitude,'speed_kmh':x.speed_kmh,'heading':x.heading,'accuracy_m':x.accuracy_m,'sequence':x.sequence} for x in rows]
-    latest=points[-1] if points else None
-    return jsonify(asset={'id':asset.id,'name':asset.name},from_time=start.isoformat(),to_time=end.isoformat(),count=len(points),last_known_position=latest,points=points)
+    if payload.get('device_id') and payload['device_id']!=device.device_uid:return jsonify(error='device_id mismatch'),403
+    sampled=parse_time(payload.get('timestamp'));sequence=str(payload.get('sequence',''))
+    accepted=[]; asset=device.asset
+    for item in payload.get('measurements',[]):
+        sig=SignalDefinition.query.filter_by(asset_id=asset.id,key=item.get('point'),enabled=True).first()
+        if not sig:continue
+        try: raw=float(item.get('value'));value=scale_signal(sig,raw)
+        except:continue
+        seq=f'{sequence}:{sig.key}' if sequence else f'{sampled.isoformat()}:{sig.key}'
+        if Reading.query.filter_by(signal_id=sig.id,sequence=seq).first():continue
+        db.session.add(Reading(customer_id=device.customer_id,asset_id=asset.id,signal_id=sig.id,sampled_at=sampled,value=value,raw_value=raw,unit=sig.unit,quality=item.get('quality','GOOD'),sequence=seq));evaluate_alarm(sig,value);accepted.append(sig.key)
+    loc=payload.get('location') or {}
+    if loc.get('latitude') is not None and loc.get('longitude') is not None:db.session.add(Location(customer_id=device.customer_id,asset_id=asset.id,sampled_at=sampled,latitude=float(loc['latitude']),longitude=float(loc['longitude']),speed_kmh=loc.get('speed_kmh'),accuracy_m=loc.get('accuracy_m'),heading=loc.get('heading'),sequence=sequence))
+    device.last_seen=utcnow();asset.last_seen=utcnow();device.firmware=payload.get('firmware',device.firmware);db.session.commit();return jsonify(status='accepted',points=accepted),202
 
 @bp.get('/api/v1/assets/<int:asset_id>/latest')
 @login_required
