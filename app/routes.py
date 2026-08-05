@@ -67,11 +67,25 @@ def enforce_subscription_access():
     allowed,sub=entitlement_for(current_user.customer_id)
     if not allowed:return redirect(url_for('main.subscription_required'))
 
-@bp.get('/health')
-def health():
-    return {
-        'status': 'ok',
-        'service': 'assettrack360-rev17',
+@bp.get("/robots.txt")
+def robots_txt():
+    body = (
+        "User-agent: *\n"
+        "Allow: /\n"
+        "Disallow: /dashboard\n"
+        "Disallow: /asset/\n"
+        "Disallow: /devices\n"
+        "Disallow: /account\n"
+        "Disallow: /billing\n"
+        "Disallow: /integrations\n"
+        "Disallow: /edge-gateways\n"
+        "Disallow: /api/\n"
+        "Disallow: /onboarding\n\n"
+        "Sitemap: https://fleettrack.wykiesautomation.co.za/sitemap.xml\n"
+    )
+
+    return body, 200, {
+        "Content-Type": "text/plain; charset=utf-8"
     }
 
 
