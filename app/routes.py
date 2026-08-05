@@ -67,25 +67,11 @@ def enforce_subscription_access():
     allowed,sub=entitlement_for(current_user.customer_id)
     if not allowed:return redirect(url_for('main.subscription_required'))
 
-@bp.get("/robots.txt")
-def robots_txt():
-    body = (
-        "User-agent: *\n"
-        "Allow: /\n"
-        "Disallow: /dashboard\n"
-        "Disallow: /asset/\n"
-        "Disallow: /devices\n"
-        "Disallow: /account\n"
-        "Disallow: /billing\n"
-        "Disallow: /integrations\n"
-        "Disallow: /edge-gateways\n"
-        "Disallow: /api/\n"
-        "Disallow: /onboarding\n\n"
-        "Sitemap: https://fleettrack.wykiesautomation.co.za/sitemap.xml\n"
-    )
-
-    return body, 200, {
-        "Content-Type": "text/plain; charset=utf-8"
+@bp.get("/health")
+def health():
+    return {
+        "status": "ok",
+        "service": "assettrack360-rev17",
     }
 
 
@@ -100,10 +86,6 @@ def google_site_verification():
 
 @bp.get("/robots.txt")
 def robots_txt():
-    # Existing robots.txt code continues here
-
-@bp.get("/robots.txt")
-def robots_txt():
     body = (
         "User-agent: *\n"
         "Allow: /\n"
@@ -118,7 +100,10 @@ def robots_txt():
         "Disallow: /onboarding\n\n"
         "Sitemap: https://fleettrack.wykiesautomation.co.za/sitemap.xml\n"
     )
-    return body, 200, {"Content-Type": "text/plain; charset=utf-8"}
+    return body, 200, {
+        "Content-Type": "text/plain; charset=utf-8"
+    }
+
 
 @bp.get("/sitemap.xml")
 def sitemap_xml():
@@ -144,14 +129,19 @@ def sitemap_xml():
     xml += '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
     xml += "\n".join(entries)
     xml += "\n</urlset>\n"
-    return xml, 200, {"Content-Type": "application/xml; charset=utf-8"}
+    return xml, 200, {
+        "Content-Type": "application/xml; charset=utf-8"
+    }
+
 
 @bp.get("/site.webmanifest")
 def site_webmanifest():
     return jsonify(
         name="AssetTrack 360",
         short_name="AssetTrack 360",
-        description="Secure fleet, diesel, tank and connected-asset monitoring.",
+        description=(
+            "Secure fleet, diesel, tank and connected-asset monitoring."
+        ),
         start_url="/",
         display="standalone",
         background_color="#061622",
