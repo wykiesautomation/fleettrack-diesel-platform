@@ -1,4 +1,4 @@
-import secrets, re
+import os, secrets, re
 from datetime import datetime, timezone, timedelta
 from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify, abort, session, current_app
 from flask_login import login_user, logout_user, login_required, current_user
@@ -92,7 +92,12 @@ def robots_txt():
 def sitemap_xml():
     base_url = "https://fleettrack.wykiesautomation.co.za"
     last_modified = datetime.now(timezone.utc).date().isoformat()
-    pages = (("/", "daily", "1.0"), ("/register", "weekly", "0.9"), ("/login", "monthly", "0.5"), ("/plans", "weekly", "0.8"))
+    pages = (
+        ("/", "daily", "1.0"),
+        ("/register", "weekly", "0.9"),
+        ("/login", "monthly", "0.5"),
+        ("/plans", "weekly", "0.8"),
+    )
     entries = []
     for path, change_frequency, priority in pages:
         entries.append(
@@ -111,7 +116,16 @@ def sitemap_xml():
 
 @bp.get("/site.webmanifest")
 def site_webmanifest():
-    return jsonify(name="AssetTrack 360", short_name="AssetTrack 360", description="Secure fleet, diesel, tank and connected-asset monitoring.", start_url="/", display="standalone", background_color="#061622", theme_color="#083344")
+    return jsonify(
+        name="AssetTrack 360",
+        short_name="AssetTrack 360",
+        description="Secure fleet, diesel, tank and connected-asset monitoring.",
+        start_url="/",
+        display="standalone",
+        background_color="#061622",
+        theme_color="#083344",
+    )
+
 
 @bp.route('/register',methods=['GET','POST'])
 def register():
