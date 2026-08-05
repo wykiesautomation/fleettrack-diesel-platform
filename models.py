@@ -35,6 +35,14 @@ class Device(db.Model):
     asset_id=db.Column(db.Integer,db.ForeignKey('asset.id'),nullable=False,index=True); device_uid=db.Column(db.String(100),unique=True,nullable=False,index=True)
     device_type=db.Column(db.String(60),default='UNIVERSAL'); api_token=db.Column(db.String(100),unique=True,nullable=False,index=True)
     active=db.Column(db.Boolean,default=True); last_seen=db.Column(db.DateTime(timezone=True)); firmware=db.Column(db.String(40)); capabilities=db.Column(db.JSON,default=list)
+    expected_imei=db.Column(db.String(15),unique=True,index=True)
+    reported_imei=db.Column(db.String(15),index=True)
+    imei_status=db.Column(db.String(30),default='NOT_BOUND',nullable=False,index=True)
+    device_state=db.Column(db.String(30),default='WAITING',nullable=False,index=True)
+    imei_bound_at=db.Column(db.DateTime(timezone=True))
+    identity_checked_at=db.Column(db.DateTime(timezone=True))
+    quarantine_reason=db.Column(db.String(240))
+    last_ip=db.Column(db.String(80))
     asset=db.relationship('Asset')
 
 class SignalDefinition(db.Model):
@@ -166,3 +174,67 @@ class IntegrationEvent(db.Model):
     status=db.Column(db.String(20),nullable=False)
     detail=db.Column(db.String(500))
     created_at=db.Column(db.DateTime(timezone=True),default=now,nullable=False)
+
+class ConnectorEndpointConfig(db.Model):
+    id=db.Column(db.Integer,primary_key=True)
+    customer_id=db.Column(db.Integer,nullable=False,index=True)
+    connector_id=db.Column(db.Integer,db.ForeignKey('integration_connector.id'),nullable=False,unique=True,index=True)
+    auth_mode=db.Column(db.String(30),default='NONE',nullable=False)
+    secret_env_ref=db.Column(db.String(120))
+    secondary_secret_env_ref=db.Column(db.String(120))
+    request_method=db.Column(db.String(10),default='GET',nullable=False)
+    headers_json=db.Column(db.JSON,default=dict)
+    query_json=db.Column(db.JSON,default=dict)
+    timeout_seconds=db.Column(db.Integer,default=20,nullable=False)
+    retry_limit=db.Column(db.Integer,default=3,nullable=False)
+    backoff_seconds=db.Column(db.Integer,default=5,nullable=False)
+    cursor_path=db.Column(db.String(200)); next_url_path=db.Column(db.String(200))
+    source_ip_allowlist=db.Column(db.String(500))
+    hmac_secret_env_ref=db.Column(db.String(120)); hmac_header=db.Column(db.String(80),default='X-AssetTrack-Signature')
+    timestamp_header=db.Column(db.String(80),default='X-AssetTrack-Timestamp'); idempotency_header=db.Column(db.String(80),default='X-Idempotency-Key')
+    updated_at=db.Column(db.DateTime(timezone=True),default=now,onupdate=now,nullable=False)
+    connector=db.relationship('IntegrationConnector')
+
+class UniversalSourceMapping(db.Model):
+    id=db.Column(db.Integer,primary_key=True)
+    customer_id=db.Column(db.Integer,nullable=False,index=True)
+    connector_id=db.Column(db.Integer,db.ForeignKey('integration_connector.id'),nullable=False,index=True)
+    asset_id=db.Column(db.Integer,db.ForeignKey('asset.id'),nullable=False,index=True)
+    signal_id=db.Column(db.Integer,db.ForeignKey('signal_definition.id'),nullable=False,index=True)
+    source_path=db.Column(db.String(300),nullable=False)
+    timestamp_path=db.Column(db.String(200)); quality_path=db.Column(db.String(200))
+    data_type=db.Column(db.String(40),default='FLOAT',nullable=False)
+    scale=db.Column(db.Float,default=1.0,nullable=False); offset=db.Column(db.Float,default=0.0,nullable=False)
+    byte_order=db.Column(db.String(20),default='BIG'); word_order=db.Column(db.String(20),default='BIG')
+    enabled=db.Column(db.Boolean,default=True,nullable=False)
+    last_value=db.Column(db.Float); last_quality=db.Column(db.String(20)); last_success_at=db.Column(db.DateTime(timezone=True)); last_error=db.Column(db.String(500))
+    asset=db.relationship('Asset'); signal=db.relationship('SignalDefinition'); connector=db.relationship('IntegrationConnector')
+    __table_args__=(db.UniqueConstraint('connector_id','source_path','signal_id',name='uq_universal_source_signal'),)
+
+class WebhookReceipt(db.Model):
+    id=db.Column(db.BigInteger,primary_key=True)
+    customer_id=db.Column(db.Integer,nullable=False,index=True); connector_id=db.Column(db.Integer,nullable=False,index=True)
+    idempotency_key=db.Column(db.String(160),nullable=False); body_hash=db.Column(db.String(64),nullable=False)
+    status=db.Column(db.String(30),nullable=False,index=True); mapped_points=db.Column(db.Integer,default=0,nullable=False)
+    source_ip=db.Column(db.String(80)); detail=db.Column(db.String(500)); received_at=db.Column(db.DateTime(timezone=True),default=now,nullable=False,index=True)
+    __table_args__=(db.UniqueConstraint('connector_id','idempotency_key',name='uq_webhook_connector_idempotency'),)
+
+class EdgeGateway(db.Model):
+    id=db.Column(db.Integer,primary_key=True); customer_id=db.Column(db.Integer,nullable=False,index=True)
+    gateway_uid=db.Column(db.String(100),nullable=False,unique=True,index=True); name=db.Column(db.String(120),nullable=False)
+    api_token=db.Column(db.String(120),nullable=False,unique=True,index=True); active=db.Column(db.Boolean,default=True,nullable=False)
+    version=db.Column(db.String(40)); last_heartbeat_at=db.Column(db.DateTime(timezone=True)); last_ip=db.Column(db.String(80)); capabilities=db.Column(db.JSON,default=list)
+    created_at=db.Column(db.DateTime(timezone=True),default=now,nullable=False)
+
+class IntegrationJobEvent(db.Model):
+    id=db.Column(db.BigInteger,primary_key=True); customer_id=db.Column(db.Integer,nullable=False,index=True); connector_id=db.Column(db.Integer,index=True)
+    worker_type=db.Column(db.String(30),nullable=False); status=db.Column(db.String(30),nullable=False,index=True)
+    attempt=db.Column(db.Integer,default=1,nullable=False); mapped_points=db.Column(db.Integer,default=0,nullable=False)
+    duration_ms=db.Column(db.Integer); detail=db.Column(db.String(500)); created_at=db.Column(db.DateTime(timezone=True),default=now,nullable=False,index=True)
+
+class MqttSubscription(db.Model):
+ id=db.Column(db.Integer,primary_key=True);customer_id=db.Column(db.Integer,nullable=False,index=True);connector_id=db.Column(db.Integer,db.ForeignKey('integration_connector.id'),nullable=False,index=True);topic_filter=db.Column(db.String(300),nullable=False);qos=db.Column(db.Integer,default=1);enabled=db.Column(db.Boolean,default=True);created_at=db.Column(db.DateTime(timezone=True),default=now)
+class MqttTopicMapping(db.Model):
+ id=db.Column(db.Integer,primary_key=True);customer_id=db.Column(db.Integer,nullable=False,index=True);connector_id=db.Column(db.Integer,nullable=False,index=True);subscription_id=db.Column(db.Integer,db.ForeignKey('mqtt_subscription.id'),nullable=False,index=True);asset_id=db.Column(db.Integer,db.ForeignKey('asset.id'),nullable=False);signal_id=db.Column(db.Integer,db.ForeignKey('signal_definition.id'),nullable=False);json_path=db.Column(db.String(240),default='value');timestamp_path=db.Column(db.String(240));quality_path=db.Column(db.String(240));scale=db.Column(db.Float,default=1.0);offset=db.Column(db.Float,default=0.0);enabled=db.Column(db.Boolean,default=True);last_value=db.Column(db.Float);last_quality=db.Column(db.String(20));last_message_at=db.Column(db.DateTime(timezone=True));last_error=db.Column(db.String(500));subscription=db.relationship('MqttSubscription');asset=db.relationship('Asset');signal=db.relationship('SignalDefinition')
+class MqttMessageEvent(db.Model):
+ id=db.Column(db.BigInteger,primary_key=True);customer_id=db.Column(db.Integer,nullable=False,index=True);connector_id=db.Column(db.Integer,nullable=False,index=True);topic=db.Column(db.String(300),nullable=False);payload_size=db.Column(db.Integer,default=0);mapped_points=db.Column(db.Integer,default=0);status=db.Column(db.String(20));detail=db.Column(db.String(500));received_at=db.Column(db.DateTime(timezone=True),default=now)

@@ -1,0 +1,31 @@
+{% extends 'base.html' %}{% block title %}Device | {{asset.name}}{% endblock %}{% block body %}
+<div class="head"><div><span class="eyebrow">DEVICE REGISTRY</span><h1>{{asset.name}}</h1></div><a class="button" href="/asset/{{asset.id}}">Dashboard</a></div>
+{% if device %}
+<div class="panel device-panel">
+ <div class="device-title"><div><h2>{{device.device_uid}}</h2><p>Type: {{device.device_type}} · Firmware: {{device.firmware or 'Not reported'}}</p></div><span class="pill {{'healthy' if device.device_state == 'ONLINE' else 'offline'}}">{{device.device_state or 'WAITING'}}</span></div>
+ {% if new_token %}<div class="token-reveal"><span class="eyebrow">ONE-TIME API TOKEN</span><p>Copy this token now. It will be hidden after leaving this page.</p><div class="copy-row"><input id="token-value" readonly value="{{new_token}}"><button type="button" onclick="navigator.clipboard.writeText(document.getElementById('token-value').value);this.textContent='Copied'">Copy token</button></div></div>{% else %}<div class="masked-token"><b>API token:</b> ••••••••••••••••••••••••••••••••</div>{% endif %}
+ <div class="device-health">
+  <div><small>LAST CONTACT</small><b>{{device.last_seen.strftime('%Y-%m-%d %H:%M UTC') if device.last_seen else 'No telemetry yet'}}</b></div>
+  <div><small>FIRMWARE</small><b>{{device.firmware or 'Not reported'}}</b></div>
+  <div><small>EXPECTED IMEI</small><b>{{device.expected_imei or 'Not bound'}}</b></div>
+  <div><small>REPORTED IMEI</small><b>{{device.reported_imei or 'Waiting for device'}}</b></div>
+  <div><small>IMEI STATUS</small><b>{{device.imei_status or 'NOT_BOUND'}}</b></div>
+  <div><small>IDENTITY CHECK</small><b>{{device.identity_checked_at.strftime('%Y-%m-%d %H:%M UTC') if device.identity_checked_at else 'Not checked'}}</b></div>
+ </div>
+ {% if device.quarantine_reason %}<div class="token-reveal"><b>QUARANTINE REASON</b><p>{{device.quarantine_reason}}</p></div>{% endif %}
+ {% if device.imei_status == 'PENDING_APPROVAL' and device.reported_imei %}<div class="copy-row"><form method="post" action="/devices/{{device.id}}/approve-imei" onsubmit="return confirm('Bind IMEI {{device.reported_imei}} permanently to this device?')"><button>Approve and Bind IMEI</button></form><form method="post" action="/devices/{{device.id}}/reject-imei" onsubmit="return confirm('Reject this IMEI and quarantine the device?')"><button class="danger">Reject and Quarantine</button></form></div>{% endif %}
+ {% if device.expected_imei %}<form method="post" action="/devices/{{device.id}}/clear-imei" onsubmit="return confirm('Clear the approved IMEI? The next modem must be approved again.')"><button class="danger">Replace Modem / Clear IMEI Binding</button></form>{% endif %}
+ <form method="post" action="/devices/{{device.id}}/rotate-token" onsubmit="return confirm('Rotate the API token? The current device or simulator will stop working until updated.')"><button class="danger">Rotate API token</button></form>
+ <pre>POST /api/v1/ingest
+Authorization: Bearer &lt;device token&gt;
+JSON: device_id + imei + firmware + measurements</pre>
+</div>
+{% else %}
+<form class="panel form-grid" method="post">
+ <label>Device UID<input name="device_uid" required placeholder="AT360-TANK-0002"></label>
+ <label>Device type<select name="device_type"><option>UNIVERSAL</option><option>ESP32_SIM868</option><option>ESP32_LTE_CAT1</option><option>PLC_GATEWAY</option><option>THIRD_PARTY_API</option></select></label>
+ <label>IMEI binding<select name="imei_binding_mode" onchange="document.getElementById('imei-manual').hidden=this.value!='MANUAL'"><option value="FIRST_CONTACT">Detect and approve on first contact</option><option value="MANUAL">Enter expected IMEI now</option></select></label>
+ <label id="imei-manual" hidden>Expected 15-digit IMEI<input name="expected_imei" inputmode="numeric" pattern="[0-9]{15}" maxlength="15" placeholder="867234051234568"></label>
+ <button>Register device</button>
+</form>
+{% endif %}{% endblock %}
