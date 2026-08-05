@@ -69,18 +69,15 @@ def enforce_subscription_access():
 
 @bp.get("/health")
 def health():
-    return {
-        "status": "ok",
-        "service": "assettrack360-rev17",
-    }
+    return {"status": "ok", "service": "assettrack360-rev17"}
 
 
 @bp.get("/googleea2fb5a297eb0738.html")
 def google_site_verification():
-    return send_from_directory(
-        current_app.root_path,
-        "googleea2fb5a297eb0738.html",
-        mimetype="text/html",
+    return (
+        "google-site-verification: googleea2fb5a297eb0738.html",
+        200,
+        {"Content-Type": "text/html; charset=utf-8"},
     )
 
 
@@ -100,9 +97,7 @@ def robots_txt():
         "Disallow: /onboarding\n\n"
         "Sitemap: https://fleettrack.wykiesautomation.co.za/sitemap.xml\n"
     )
-    return body, 200, {
-        "Content-Type": "text/plain; charset=utf-8"
-    }
+    return body, 200, {"Content-Type": "text/plain; charset=utf-8"}
 
 
 @bp.get("/sitemap.xml")
@@ -129,9 +124,7 @@ def sitemap_xml():
     xml += '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
     xml += "\n".join(entries)
     xml += "\n</urlset>\n"
-    return xml, 200, {
-        "Content-Type": "application/xml; charset=utf-8"
-    }
+    return xml, 200, {"Content-Type": "application/xml; charset=utf-8"}
 
 
 @bp.get("/site.webmanifest")
@@ -139,9 +132,7 @@ def site_webmanifest():
     return jsonify(
         name="AssetTrack 360",
         short_name="AssetTrack 360",
-        description=(
-            "Secure fleet, diesel, tank and connected-asset monitoring."
-        ),
+        description="Secure fleet, diesel, tank and connected-asset monitoring.",
         start_url="/",
         display="standalone",
         background_color="#061622",
