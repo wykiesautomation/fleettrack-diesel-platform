@@ -1,7 +1,7 @@
 import os
 from datetime import datetime, timezone, timedelta
 
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, Response, jsonify, request, send_from_directory
 from flask_login import LoginManager
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.exc import OperationalError
@@ -81,15 +81,10 @@ def create_app(test_config=None):
     app.register_blueprint(bp)
     from .edge_gateway_registry import edge_bp
     app.register_blueprint(edge_bp)
-    from .seo import seo_bp, register_seo_hooks
-    app.register_blueprint(seo_bp)
-    register_seo_hooks(app)
 
     with app.app_context():
         from . import edge_models  # Registers REV20A tables before create_all.
         db.create_all()
-        from .device_identity_migration import ensure_device_identity_schema
-        ensure_device_identity_schema(db)
 
         email = os.getenv("BOOTSTRAP_ADMIN_EMAIL", "").strip().lower()
         password = os.getenv("BOOTSTRAP_ADMIN_PASSWORD", "")
@@ -148,5 +143,62 @@ def create_app(test_config=None):
                     )
                 )
         db.session.commit()
+
+    @app.get("/robots.txt")
+    def robots_txt():
+        base_url = os.getenv("PUBLIC_BASE_URL", "https://fleettrack.wykiesautomation.co.za").rstrip("/")
+        body = (
+            "User-agent: *\n"
+            "Allow: /\n"
+            "Disallow: /dashboard\n"
+            "Disallow: /asset/\n"
+            "Disallow: /devices\n"
+            "Disallow: /account\n"
+            "Disallow: /billing\n"
+            "Disallow: /integrations\n"
+            "Disallow: /edge-gateways\n"
+            "Disallow: /api/\n"
+            "Disallow: /onboarding\n\n"
+            f"Sitemap: {base_url}/sitemap.xml\n"
+        )
+        return Response(body, mimetype="text/plain")
+
+    @app.get("/sitemap.xml")
+    def sitemap_xml():
+        base_url = os.getenv("PUBLIC_BASE_URL", "https://fleettrack.wykiesautomation.co.za").rstrip("/")
+        last_modified = datetime.now(timezone.utc).date().isoformat()
+        pages = (("/", "daily", "1.0"), ("/register", "weekly", "0.9"), ("/login", "monthly", "0.5"), ("/plans", "weekly", "0.8"))
+        entries = []
+        for path, change_frequency, priority in pages:
+            entries.append(
+                "  <url>\n"
+                f"    <loc>{base_url}{path}</loc>\n"
+                f"    <lastmod>{last_modified}</lastmod>\n"
+                f"    <changefreq>{change_frequency}</changefreq>\n"
+                f"    <priority>{priority}</priority>\n"
+                "  </url>"
+            )
+        xml = '<?xml version="1.0" encoding="UTF-8"?>\n'
+        xml += '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+        xml += "\n".join(entries)
+        xml += "\n</urlset>\n"
+        return Response(xml, mimetype="application/xml")
+
+    @app.get("/site.webmanifest")
+    def site_webmanifest():
+        return jsonify(
+            name="AssetTrack 360",
+            short_name="AssetTrack 360",
+            description="Secure fleet, diesel, tank and connected-asset monitoring.",
+            start_url="/",
+            display="standalone",
+            background_color="#061622",
+            theme_color="#083344",
+        )
+
+    @app.get("/BingSiteAuth.xml")
+    def bing_site_auth():
+        repository_root = os.path.dirname(app.root_path)
+        return send_from_directory(repository_root, "BingSiteAuth.xml", mimetype="application/xml")
 
     return app
