@@ -144,4 +144,13 @@ def create_app(test_config=None):
                 )
         db.session.commit()
 
+    @app.get("/BingSiteAuth.xml")
+    def bing_site_auth():
+        repository_root = os.path.dirname(app.root_path)
+        return send_from_directory(
+            repository_root,
+            "BingSiteAuth.xml",
+            mimetype="application/xml",
+        )
+
     return app
