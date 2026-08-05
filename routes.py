@@ -1,6 +1,6 @@
-import os, secrets, re
+import secrets, re
 from datetime import datetime, timezone, timedelta
-from flask import Blueprint, Response, render_template, request, redirect, url_for, flash, jsonify, abort, session, current_app
+from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify, abort, session, current_app
 from flask_login import login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import desc
@@ -72,8 +72,7 @@ def health(): return {'status':'ok','service':'assettrack360-rev17'}
 
 @bp.get("/robots.txt")
 def robots_txt():
-    base_url=os.getenv("PUBLIC_BASE_URL","https://fleettrack.wykiesautomation.co.za").rstrip("/")
-    body=(
+    body = (
         "User-agent: *\n"
         "Allow: /\n"
         "Disallow: /dashboard\n"
@@ -85,17 +84,17 @@ def robots_txt():
         "Disallow: /edge-gateways\n"
         "Disallow: /api/\n"
         "Disallow: /onboarding\n\n"
-        f"Sitemap: {base_url}/sitemap.xml\n"
+        "Sitemap: https://fleettrack.wykiesautomation.co.za/sitemap.xml\n"
     )
-    return Response(body,mimetype="text/plain")
+    return body, 200, {"Content-Type": "text/plain; charset=utf-8"}
 
 @bp.get("/sitemap.xml")
 def sitemap_xml():
-    base_url=os.getenv("PUBLIC_BASE_URL","https://fleettrack.wykiesautomation.co.za").rstrip("/")
-    last_modified=datetime.now(timezone.utc).date().isoformat()
-    pages=(("/","daily","1.0"),("/register","weekly","0.9"),("/login","monthly","0.5"),("/plans","weekly","0.8"))
-    entries=[]
-    for path,change_frequency,priority in pages:
+    base_url = "https://fleettrack.wykiesautomation.co.za"
+    last_modified = datetime.now(timezone.utc).date().isoformat()
+    pages = (("/", "daily", "1.0"), ("/register", "weekly", "0.9"), ("/login", "monthly", "0.5"), ("/plans", "weekly", "0.8"))
+    entries = []
+    for path, change_frequency, priority in pages:
         entries.append(
             "  <url>\n"
             f"    <loc>{base_url}{path}</loc>\n"
@@ -104,23 +103,15 @@ def sitemap_xml():
             f"    <priority>{priority}</priority>\n"
             "  </url>"
         )
-    xml='<?xml version="1.0" encoding="UTF-8"?>\n'
-    xml+='<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
-    xml+="\n".join(entries)
-    xml+="\n</urlset>\n"
-    return Response(xml,mimetype="application/xml")
+    xml = '<?xml version="1.0" encoding="UTF-8"?>\n'
+    xml += '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+    xml += "\n".join(entries)
+    xml += "\n</urlset>\n"
+    return xml, 200, {"Content-Type": "application/xml; charset=utf-8"}
 
 @bp.get("/site.webmanifest")
 def site_webmanifest():
-    return jsonify(
-        name="AssetTrack 360",
-        short_name="AssetTrack 360",
-        description="Secure fleet, diesel, tank and connected-asset monitoring.",
-        start_url="/",
-        display="standalone",
-        background_color="#061622",
-        theme_color="#083344",
-    )
+    return jsonify(name="AssetTrack 360", short_name="AssetTrack 360", description="Secure fleet, diesel, tank and connected-asset monitoring.", start_url="/", display="standalone", background_color="#061622", theme_color="#083344")
 
 @bp.route('/register',methods=['GET','POST'])
 def register():
