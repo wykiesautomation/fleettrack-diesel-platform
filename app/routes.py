@@ -69,6 +69,81 @@ def enforce_subscription_access():
 
 @bp.get('/health')
 def health(): return {'status':'ok','service':'assettrack360-rev17'}
+@bp.get("/robots.txt")
+def robots_txt():
+    base_url = os.getenv(
+        "PUBLIC_BASE_URL",
+        "https://fleettrack.wykiesautomation.co.za",
+    ).rstrip("/")
+
+    body = (
+        "User-agent: *\n"
+        "Allow: /\n"
+        "Disallow: /dashboard\n"
+        "Disallow: /asset/\n"
+        "Disallow: /devices\n"
+        "Disallow: /account\n"
+        "Disallow: /billing\n"
+        "Disallow: /integrations\n"
+        "Disallow: /edge-gateways\n"
+        "Disallow: /api/\n"
+        "Disallow: /onboarding\n\n"
+        f"Sitemap: {base_url}/sitemap.xml\n"
+    )
+
+    return Response(body, mimetype="text/plain")
+
+
+@bp.get("/sitemap.xml")
+def sitemap_xml():
+    base_url = os.getenv(
+        "PUBLIC_BASE_URL",
+        "https://fleettrack.wykiesautomation.co.za",
+    ).rstrip("/")
+
+    last_modified = datetime.now(timezone.utc).date().isoformat()
+
+    public_pages = (
+        ("/", "daily", "1.0"),
+        ("/register", "weekly", "0.9"),
+        ("/login", "monthly", "0.5"),
+        ("/plans", "weekly", "0.8"),
+    )
+
+    entries = []
+
+    for path, change_frequency, priority in public_pages:
+        entries.append(
+            "  <url>\n"
+            f"    <loc>{base_url}{path}</loc>\n"
+            f"    <lastmod>{last_modified}</lastmod>\n"
+            f"    <changefreq>{change_frequency}</changefreq>\n"
+            f"    <priority>{priority}</priority>\n"
+            "  </url>"
+        )
+
+    xml = '<?xml version="1.0" encoding="UTF-8"?>\n'
+    xml += '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+    xml += "\n".join(entries)
+    xml += "\n</urlset>\n"
+
+    return Response(xml, mimetype="application/xml")
+
+
+@bp.get("/site.webmanifest")
+def site_webmanifest():
+    return jsonify(
+        name="AssetTrack 360",
+        short_name="AssetTrack 360",
+        description=(
+            "Secure fleet, diesel, tank and connected-asset monitoring."
+        ),
+        start_url="/",
+        display="standalone",
+        background_color="#061622",
+        theme_color="#083344",
+    )
+    
 
 @bp.route('/register',methods=['GET','POST'])
 def register():
