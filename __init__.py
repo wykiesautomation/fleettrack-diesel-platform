@@ -81,6 +81,9 @@ def create_app(test_config=None):
     app.register_blueprint(bp)
     from .edge_gateway_registry import edge_bp
     app.register_blueprint(edge_bp)
+    from .seo import seo_bp, register_seo_hooks
+    app.register_blueprint(seo_bp)
+    register_seo_hooks(app)
 
     with app.app_context():
         from . import edge_models  # Registers REV20A tables before create_all.
