@@ -69,6 +69,14 @@ def enforce_subscription_access():
 
 @bp.get('/health')
 def health(): return {'status':'ok','service':'assettrack360-rev17'}
+    
+    @bp.get("/googleea2fb5a297eb0738.html")
+def google_site_verification():
+    return send_from_directory(
+        current_app.root_path,
+        "googleea2fb5a297eb0738.html",
+        mimetype="text/html",
+    )
 
 @bp.get("/robots.txt")
 def robots_txt():
