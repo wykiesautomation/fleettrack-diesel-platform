@@ -1,4 +1,4 @@
-import os, secrets, re
+import os, secrets, re, hashlib
 from datetime import datetime, timezone, timedelta
 from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify, abort, session, current_app, send_from_directory
 from flask_login import login_user, logout_user, login_required, current_user
@@ -6,7 +6,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import desc
 from . import db
 from .payfast import config as payfast_config,build_checkout,event_hash,valid_signature,valid_source,server_validate,forwarded_ip
-from .models import Customer,User,Site,Asset,Device,SignalDefinition,Reading,Alarm,Location,WorkspaceProfile,SubscriptionPlan,Subscription,PaymentRecord,PayFastEvent,SubscriptionAuditEvent,IntegrationConnector,IntegrationSignalMapping,IntegrationEvent,ConnectorEndpointConfig,UniversalSourceMapping,WebhookReceipt,EdgeGateway,IntegrationJobEvent,MqttSubscription,MqttTopicMapping,MqttMessageEvent
+from .models import Customer,User,Site,Asset,Device,SignalDefinition,Reading,Alarm,Location,WorkspaceProfile,SubscriptionPlan,Subscription,PaymentRecord,PayFastEvent,SubscriptionAuditEvent,IntegrationConnector,IntegrationSignalMapping,IntegrationEvent,ConnectorEndpointConfig,UniversalSourceMapping,WebhookReceipt,EdgeGateway,IntegrationJobEvent,MqttSubscription,MqttTopicMapping,MqttMessageEvent,MobileTrackerRegistration
 bp=Blueprint('main',__name__)
 
 def utcnow(): return datetime.now(timezone.utc)
@@ -19,6 +19,11 @@ def parse_time(v):
 def aware(value):
     if not value:return None
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+def mobile_code_hash(value):
+    return hashlib.sha256(str(value).strip().upper().encode('utf-8')).hexdigest()
+def mobile_tracker_device():
+    token=request.headers.get('Authorization','').removeprefix('Bearer ').strip()
+    return Device.query.filter_by(api_token=token,active=True,device_type='MOBILE_WEB_TRACKER').first() if token else None
 def latest_reading(signal_id):
     return Reading.query.filter_by(signal_id=signal_id).order_by(desc(Reading.sampled_at)).first()
 def asset_status(asset):
@@ -316,6 +321,75 @@ def account():
         subscription=subscription,
     )
 
+
+@bp.post('/asset/<int:asset_id>/mobile-tracker/create')
+@login_required
+def create_mobile_tracker(asset_id):
+    asset=Asset.query.filter_by(id=asset_id,customer_id=tenant_id()).first_or_404()
+    if Device.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,device_type='MOBILE_WEB_TRACKER',active=True).first():
+        flash('This asset already has an active Mobile Phone Tracker.','error')
+        return redirect(url_for('main.asset_view',asset_id=asset.id))
+    MobileTrackerRegistration.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,used_at=None).delete(synchronize_session=False)
+    code=f'{secrets.token_hex(2).upper()}-{secrets.token_hex(2).upper()}'
+    db.session.add(MobileTrackerRegistration(customer_id=tenant_id(),asset_id=asset.id,code_hash=mobile_code_hash(code),device_uid=f'AT360-PHONE-{asset.id:06d}',expires_at=utcnow()+timedelta(minutes=30),created_by=current_user.id))
+    db.session.commit()
+    session['mobile_registration_code']=code;session['mobile_registration_asset']=asset.name
+    return redirect(url_for('main.mobile_tracker_setup'))
+
+@bp.get('/mobile-tracker/setup')
+@login_required
+def mobile_tracker_setup():
+    return render_template('mobile_tracker_setup.html',code=session.pop('mobile_registration_code',None),asset_name=session.pop('mobile_registration_asset',None))
+
+@bp.post('/api/v1/mobile/register')
+def mobile_tracker_register():
+    data=request.get_json(silent=True) or {};code=str(data.get('code','')).strip().upper()
+    if not code:return jsonify(error='registration_code_required'),400
+    reg=MobileTrackerRegistration.query.filter_by(code_hash=mobile_code_hash(code),used_at=None).first()
+    if not reg:return jsonify(error='invalid_registration_code'),404
+    if utcnow()>aware(reg.expires_at):return jsonify(error='registration_code_expired'),410
+    if Device.query.filter_by(customer_id=reg.customer_id,asset_id=reg.asset_id,device_type='MOBILE_WEB_TRACKER',active=True).first():return jsonify(error='mobile_tracker_already_registered'),409
+    token=secrets.token_urlsafe(36)
+    device=Device(customer_id=reg.customer_id,asset_id=reg.asset_id,device_uid=reg.device_uid,device_type='MOBILE_WEB_TRACKER',api_token=token,active=True,firmware='mobile-web-1.2',capabilities=['GPS','PHONE_BATTERY','USER_CONSENT_REQUIRED'])
+    reg.used_at=utcnow();db.session.add(device)
+    if not SignalDefinition.query.filter_by(asset_id=reg.asset_id,key='battery_percent').first():
+        db.session.add(SignalDefinition(customer_id=reg.customer_id,asset_id=reg.asset_id,key='battery_percent',label='Phone Battery',signal_type='PERCENT',source_type='MOBILE',unit='%',widget='battery'))
+    db.session.commit()
+    return jsonify(status='registered',device_uid=device.device_uid,device_token=token,asset_name=device.asset.name),201
+
+@bp.post('/api/v1/mobile/location')
+def mobile_tracker_location():
+    device=mobile_tracker_device()
+    if not device:return jsonify(error='invalid_mobile_tracker_token'),401
+    allowed,subscription=entitlement_for(device.customer_id)
+    if not allowed:return jsonify(error='subscription_inactive'),402
+    data=request.get_json(silent=True) or {};sequence=str(data.get('sequence','')).strip()
+    if str(data.get('device_id','')).upper()!=device.device_uid.upper():return jsonify(error='device_identity_mismatch'),403
+    if not sequence:return jsonify(error='sequence_required'),400
+    if Location.query.filter_by(asset_id=device.asset_id,sequence=sequence).first():return jsonify(status='duplicate'),200
+    try:
+        lat=float(data['latitude']);lon=float(data['longitude']);acc=max(0,float(data.get('accuracy_m') or 0));speed=max(0,float(data.get('speed_kmh') or 0))
+    except (KeyError,TypeError,ValueError):return jsonify(error='invalid_location_payload'),400
+    if not(-90<=lat<=90 and -180<=lon<=180) or speed>300:return jsonify(error='location_out_of_range'),400
+    if speed<3:speed=0.0
+    sampled=parse_time(data.get('timestamp'))
+    db.session.add(Location(customer_id=device.customer_id,asset_id=device.asset_id,sampled_at=sampled,latitude=lat,longitude=lon,speed_kmh=speed,accuracy_m=acc,heading=data.get('heading'),sequence=sequence))
+    battery=data.get('battery_percent')
+    if battery is not None:
+        sig=SignalDefinition.query.filter_by(asset_id=device.asset_id,key='battery_percent').first()
+        if not sig:
+            sig=SignalDefinition(customer_id=device.customer_id,asset_id=device.asset_id,key='battery_percent',label='Phone Battery',signal_type='PERCENT',source_type='MOBILE',unit='%',widget='battery');db.session.add(sig);db.session.flush()
+        bseq=f'{sequence}:battery'
+        if not Reading.query.filter_by(signal_id=sig.id,sequence=bseq).first():db.session.add(Reading(customer_id=device.customer_id,asset_id=device.asset_id,signal_id=sig.id,sampled_at=sampled,value=max(0,min(100,float(battery))),unit='%',quality='GOOD',sequence=bseq))
+    device.last_seen=utcnow();device.asset.last_seen=sampled;device.firmware=str(data.get('client_version') or 'mobile-web-1.2')[:40]
+    db.session.commit();return jsonify(status='accepted',sequence=sequence),202
+
+@bp.get('/api/v1/mobile/status')
+def mobile_tracker_status():
+    device=mobile_tracker_device()
+    if not device:return jsonify(error='invalid_mobile_tracker_token'),401
+    latest=Location.query.filter_by(customer_id=device.customer_id,asset_id=device.asset_id).order_by(desc(Location.sampled_at)).first()
+    return jsonify(status='ok',device_uid=device.device_uid,asset_name=device.asset.name,last_contact=device.last_seen.isoformat() if device.last_seen else None,last_position={'latitude':latest.latitude,'longitude':latest.longitude,'sampled_at':latest.sampled_at.isoformat(),'accuracy_m':latest.accuracy_m} if latest else None)
 
 @bp.get('/devices')
 @login_required
