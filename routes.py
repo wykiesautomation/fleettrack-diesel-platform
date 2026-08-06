@@ -1,4 +1,4 @@
-import os, secrets, re
+import os, secrets, re, csv, io, math
 from datetime import datetime, timezone, timedelta
 from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify, abort, session, current_app, send_from_directory
 from flask_login import login_user, logout_user, login_required, current_user
@@ -19,47 +19,43 @@ def parse_time(v):
 def aware(value):
     if not value:return None
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
-def device_capabilities(record):
-    return list(record.capabilities or [])
-
-def device_is_archived(record):
-    return 'ARCHIVED' in device_capabilities(record)
-
-def set_device_archived(record, archived):
-    capabilities = [x for x in device_capabilities(record) if x != 'ARCHIVED']
-    if archived:
-        capabilities.append('ARCHIVED')
-    record.capabilities = capabilities
-
-def lifecycle_device(device_id):
-    return Device.query.filter_by(
-        id=device_id,
-        customer_id=tenant_id(),
-    ).first_or_404()
-
-def asset_metadata(record):
-    return dict(record.metadata_json or {})
-
-def asset_is_archived(record):
-    return bool(asset_metadata(record).get('archived'))
-
-def set_asset_archived(record, archived):
-    metadata = asset_metadata(record)
-    if archived:
-        metadata['archived'] = True
-        metadata['archived_at'] = utcnow().isoformat()
-        metadata['archived_by'] = current_user.id
-    else:
-        metadata.pop('archived', None)
-        metadata.pop('archived_at', None)
-        metadata.pop('archived_by', None)
-    record.metadata_json = metadata
-
-def lifecycle_asset(asset_id):
-    return Asset.query.filter_by(
-        id=asset_id,
-        customer_id=tenant_id(),
-    ).first_or_404()
+def caps(x):return list(x.capabilities or [])
+def archived_device(x):return 'ARCHIVED' in caps(x)
+def set_device_archive(x,v):x.capabilities=[z for z in caps(x) if z!='ARCHIVED']+(['ARCHIVED'] if v else [])
+def meta(x):return dict(x.metadata_json or {})
+def archived_asset(x):return bool(meta(x).get('archived'))
+def set_asset_archive(x,v):
+ m=meta(x)
+ if v:m.update({'archived':True,'archived_at':utcnow().isoformat(),'archived_by':current_user.id})
+ else:[m.pop(k,None) for k in ('archived','archived_at','archived_by')]
+ x.metadata_json=m
+def track_time(v,fallback):
+ try:
+  d=datetime.fromisoformat(v.replace('Z','+00:00')) if v else fallback
+  return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+ except:return fallback
+def distance_km(a,b,c,d):
+ R=6371.0088;p1=math.radians(a);p2=math.radians(c);x=math.sin(math.radians(c-a)/2)**2+math.cos(p1)*math.cos(p2)*math.sin(math.radians(d-b)/2)**2
+ return 2*R*math.asin(math.sqrt(x))
+def analyse_track(rows):
+ pts=[];dist=0;mx=0;move=stop=0;gaps=0;stops=[];prev=None;ss=None;slat=slon=None
+ for x in rows:
+  t=aware(x.sampled_at);speed=max(0,float(x.speed_kmh or 0));pts.append({'timestamp':t.isoformat(),'display':t.strftime('%Y-%m-%d %H:%M UTC'),'latitude':x.latitude,'longitude':x.longitude,'speed_kmh':speed,'heading':x.heading,'accuracy_m':x.accuracy_m});mx=max(mx,speed)
+  if prev:
+   sec=max(0,(t-prev[0]).total_seconds());seg=distance_km(prev[1],prev[2],x.latitude,x.longitude)
+   if seg<=max(2,sec/3600*220+.5):dist+=seg
+   if sec>900:gaps+=1
+   if sec<=1800:
+    if speed>=3:move+=sec
+    else:stop+=sec
+  if speed<3:
+   if ss is None:ss=t;slat=x.latitude;slon=x.longitude
+  elif ss:
+   dur=(t-ss).total_seconds()
+   if dur>=300:stops.append({'start':ss.isoformat(),'end':t.isoformat(),'duration_minutes':round(dur/60),'latitude':slat,'longitude':slon})
+   ss=None
+  prev=(t,x.latitude,x.longitude)
+ return {'points':pts,'distance_km':round(dist,2),'max_speed':round(mx,1),'moving_minutes':round(move/60),'stopped_minutes':round(stop/60),'gap_count':gaps,'stops':stops,'last':pts[-1] if pts else None}
 def latest_reading(signal_id):
     return Reading.query.filter_by(signal_id=signal_id).order_by(desc(Reading.sampled_at)).first()
 def asset_status(asset):
@@ -232,8 +228,8 @@ def public_home():
 @login_required
 def dashboard():
     all_assets=Asset.query.filter_by(customer_id=tenant_id()).order_by(Asset.name).all()
-    assets=[asset for asset in all_assets if not asset_is_archived(asset)]
-    archived_asset_count=sum(1 for asset in all_assets if asset_is_archived(asset))
+    assets=[x for x in all_assets if not archived_asset(x)]
+    archived_asset_count=sum(1 for x in all_assets if archived_asset(x))
     sites=Site.query.filter_by(customer_id=tenant_id()).order_by(Site.name).all()
     devices=Device.query.filter_by(customer_id=tenant_id(),active=True).all()
     now=utcnow(); counts={'HEALTHY':0,'WARNING':0,'CRITICAL':0,'OFFLINE':0}; cards=[]; attention=[]; mapped=[]
@@ -290,7 +286,7 @@ def asset_view(asset_id):
     vib=None
     if asset.asset_type=='VIBRATION':
         value=ctx['vibration'].value if ctx['vibration'] else None;vib={'rms':value,'temperature':ctx['temperature'].value if ctx['temperature'] else None,'condition':'CRITICAL' if value is not None and value>=7.1 else 'WARNING' if value is not None and value>=4.5 else 'HEALTHY' if value is not None else 'WAITING'}
-    return render_template('asset.html',asset=asset,signal_cards=cards,signal_lookup=lookup,chart_series=series,alarms=alarms,open_alarms=open_alarms,device=device,location=location,route_points=route,last_contact=last,generated_at=now,context=ctx,tank_stats=tank,tracking_stats=track,vibration_stats=vib,asset_archived=asset_is_archived(asset))
+    return render_template('asset.html',asset=asset,signal_cards=cards,signal_lookup=lookup,chart_series=series,alarms=alarms,open_alarms=open_alarms,device=device,location=location,route_points=route,last_contact=last,generated_at=now,context=ctx,tank_stats=tank,tracking_stats=track,vibration_stats=vib)
 
 @bp.route('/asset/<int:asset_id>/signals',methods=['GET','POST'])
 @login_required
@@ -309,87 +305,6 @@ def device(asset_id):
     if request.method=='POST' and not d:
         d=Device(customer_id=tenant_id(),asset_id=asset.id,device_uid=request.form['device_uid'],device_type=request.form.get('device_type','UNIVERSAL'),api_token=secrets.token_urlsafe(32),capabilities=[]);db.session.add(d);db.session.commit();flash('Device registered. Copy the token now.','ok')
     return render_template('device.html',asset=asset,device=d)
-
-@bp.post('/assets/<int:asset_id>/archive')
-@login_required
-def archive_asset(asset_id):
-    asset = lifecycle_asset(asset_id)
-    if asset_is_archived(asset):
-        flash('Asset is already archived.', 'error')
-        return redirect(url_for('main.asset_view', asset_id=asset.id))
-    set_asset_archived(asset, True)
-    for record in Device.query.filter_by(customer_id=tenant_id(), asset_id=asset.id).all():
-        record.active = False
-        record.api_token = secrets.token_urlsafe(32)
-        set_device_archived(record, True)
-    db.session.commit()
-    flash(f'Asset {asset.name} archived. Linked devices were disabled and tokens revoked.', 'ok')
-    return redirect(url_for('main.dashboard'))
-
-@bp.get('/assets/archived')
-@login_required
-def archived_assets():
-    records = Asset.query.filter_by(customer_id=tenant_id()).order_by(Asset.name).all()
-    items=[]
-    for asset in records:
-        if not asset_is_archived(asset):
-            continue
-        metadata=asset_metadata(asset)
-        items.append({
-            'asset':asset,
-            'archived_at':metadata.get('archived_at'),
-            'device_count':Device.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).count(),
-            'reading_count':Reading.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).count(),
-            'location_count':Location.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).count(),
-            'alarm_count':Alarm.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).count(),
-        })
-    return render_template('archived_assets.html',items=items)
-
-@bp.post('/assets/<int:asset_id>/restore')
-@login_required
-def restore_asset(asset_id):
-    asset=lifecycle_asset(asset_id)
-    if not asset_is_archived(asset):
-        flash('Asset is not archived.', 'error')
-        return redirect(url_for('main.asset_view',asset_id=asset.id))
-    set_asset_archived(asset,False)
-    db.session.commit()
-    flash(f'Asset {asset.name} restored. Linked devices remain archived until individually restored.', 'ok')
-    return redirect(url_for('main.asset_view',asset_id=asset.id))
-
-@bp.post('/assets/<int:asset_id>/permanent-delete')
-@login_required
-def permanently_delete_asset(asset_id):
-    asset=lifecycle_asset(asset_id)
-    if not asset_is_archived(asset):
-        flash('Archive the asset before permanent deletion.', 'error')
-        return redirect(url_for('main.asset_view',asset_id=asset.id))
-    confirm_name=request.form.get('confirm_name','').strip()
-    confirm_word=request.form.get('confirm_word','').strip().upper()
-    if confirm_name != asset.name or confirm_word != 'DELETE':
-        flash('Permanent deletion cancelled. Asset name and DELETE confirmation must match.', 'error')
-        return redirect(url_for('main.archived_assets'))
-    # Refuse deletion while cross-platform integration mappings exist.
-    blockers=(
-        IntegrationSignalMapping.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).count()
-        + UniversalSourceMapping.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).count()
-        + MqttTopicMapping.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).count()
-    )
-    if blockers:
-        flash('Asset cannot be deleted while integration or MQTT mappings still reference it.', 'error')
-        return redirect(url_for('main.archived_assets'))
-    signal_ids=[x.id for x in SignalDefinition.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).all()]
-    Device.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
-    Location.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
-    Alarm.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
-    Reading.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
-    if signal_ids:
-        SignalDefinition.query.filter(SignalDefinition.id.in_(signal_ids)).delete(synchronize_session=False)
-    deleted_name=asset.name
-    db.session.delete(asset)
-    db.session.commit()
-    flash(f'Asset {deleted_name} and its operational history were permanently deleted.', 'ok')
-    return redirect(url_for('main.archived_assets'))
 
 @bp.post('/alarm/<int:alarm_id>/ack')
 @login_required
@@ -440,45 +355,14 @@ def account():
 @bp.get('/devices')
 @login_required
 def devices():
-    records = Device.query.filter_by(
-        customer_id=tenant_id()
-    ).order_by(Device.device_uid).all()
-    now = utcnow()
-    active_items = []
-    archived_items = []
-    for record in records:
-        online = bool(
-            record.active
-            and not device_is_archived(record)
-            and record.last_seen
-            and now - aware(record.last_seen) <= timedelta(minutes=30)
-        )
-        last_contact = 'Never'
-        if record.last_seen:
-            age_seconds = max(0, int((now - aware(record.last_seen)).total_seconds()))
-            if age_seconds < 60:
-                last_contact = 'Just now'
-            elif age_seconds < 3600:
-                last_contact = f'{age_seconds // 60} min ago'
-            elif age_seconds < 86400:
-                last_contact = f'{age_seconds // 3600} h ago'
-            else:
-                last_contact = f'{age_seconds // 86400} d ago'
-        item = {
-            'device': record,
-            'asset': record.asset,
-            'online': online,
-            'last_contact': last_contact,
-        }
-        if device_is_archived(record):
-            archived_items.append(item)
-        else:
-            active_items.append(item)
-    return render_template(
-        'devices.html',
-        items=active_items,
-        archived_items=archived_items,
-    )
+ records=Device.query.filter_by(customer_id=tenant_id()).order_by(Device.device_uid).all();now=utcnow();items=[];archived_items=[]
+ for x in records:
+  age='Never'
+  if x.last_seen:
+   sec=max(0,int((now-aware(x.last_seen)).total_seconds()));age='Just now' if sec<60 else f'{sec//60} min ago' if sec<3600 else f'{sec//3600} h ago' if sec<86400 else f'{sec//86400} d ago'
+  item={'device':x,'asset':x.asset,'online':bool(x.active and x.last_seen and now-aware(x.last_seen)<=timedelta(minutes=30)),'last_contact':age}
+  (archived_items if archived_device(x) else items).append(item)
+ return render_template('devices.html',items=items,archived_items=archived_items)
 
 @bp.post('/devices/<int:device_id>/rotate-token')
 @login_required
@@ -487,9 +371,6 @@ def rotate_device_token(device_id):
         id=device_id,
         customer_id=tenant_id(),
     ).first_or_404()
-    if device_is_archived(record):
-        flash('Restore the device before rotating its token.', 'error')
-        return redirect(url_for('main.devices'))
     record.api_token = secrets.token_urlsafe(32)
     db.session.commit()
     session['new_device_token'] = record.api_token
@@ -505,9 +386,6 @@ def toggle_device(device_id):
         id=device_id,
         customer_id=tenant_id(),
     ).first_or_404()
-    if device_is_archived(record):
-        flash('Restore the device before enabling or disabling it.', 'error')
-        return redirect(url_for('main.devices'))
     record.active = not record.active
     db.session.commit()
     flash(
@@ -517,51 +395,51 @@ def toggle_device(device_id):
     return redirect(url_for('main.devices'))
 
 
-@bp.post('/devices/<int:device_id>/archive')
+@bp.post('/devices/<int:i>/archive')
 @login_required
-def archive_device(device_id):
-    record = lifecycle_device(device_id)
-    if device_is_archived(record):
-        flash('Device is already archived.', 'error')
-        return redirect(url_for('main.devices'))
-    record.active = False
-    record.api_token = secrets.token_urlsafe(32)
-    set_device_archived(record, True)
-    db.session.commit()
-    flash(f'Device {record.device_uid} archived and its previous token revoked.', 'ok')
-    return redirect(url_for('main.devices'))
-
-@bp.post('/devices/<int:device_id>/restore')
+def archive_device(i):
+ x=Device.query.filter_by(id=i,customer_id=tenant_id()).first_or_404();x.active=False;x.api_token=secrets.token_urlsafe(32);set_device_archive(x,True);db.session.commit();flash('Device archived and token revoked.','ok');return redirect(url_for('main.devices'))
+@bp.post('/devices/<int:i>/restore')
 @login_required
-def restore_device(device_id):
-    record = lifecycle_device(device_id)
-    if not device_is_archived(record):
-        flash('Device is not archived.', 'error')
-        return redirect(url_for('main.devices'))
-    set_device_archived(record, False)
-    record.active = False
-    record.api_token = secrets.token_urlsafe(32)
-    db.session.commit()
-    flash(f'Device {record.device_uid} restored in Disabled state. Rotate the token before reuse.', 'ok')
-    return redirect(url_for('main.devices'))
-
-@bp.post('/devices/<int:device_id>/permanent-delete')
+def restore_device(i):
+ x=Device.query.filter_by(id=i,customer_id=tenant_id()).first_or_404();set_device_archive(x,False);x.active=False;x.api_token=secrets.token_urlsafe(32);db.session.commit();flash('Device restored in Disabled state.','ok');return redirect(url_for('main.devices'))
+@bp.post('/devices/<int:i>/permanent-delete')
 @login_required
-def permanently_delete_device(device_id):
-    record = lifecycle_device(device_id)
-    if not device_is_archived(record):
-        flash('Archive the device before permanent deletion.', 'error')
-        return redirect(url_for('main.devices'))
-    confirm_uid = request.form.get('confirm_uid', '').strip().upper()
-    confirm_word = request.form.get('confirm_word', '').strip().upper()
-    if confirm_uid != record.device_uid.upper() or confirm_word != 'DELETE':
-        flash('Permanent deletion cancelled. Device UID and DELETE confirmation must match.', 'error')
-        return redirect(url_for('main.devices'))
-    deleted_uid = record.device_uid
-    db.session.delete(record)
-    db.session.commit()
-    flash(f'Device {deleted_uid} permanently deleted. Asset history was retained.', 'ok')
-    return redirect(url_for('main.devices'))
+def delete_device(i):
+ x=Device.query.filter_by(id=i,customer_id=tenant_id()).first_or_404()
+ if not archived_device(x) or request.form.get('confirm_uid','').upper()!=x.device_uid.upper() or request.form.get('confirm_word','').upper()!='DELETE':flash('Archive first and enter exact UID plus DELETE.','error');return redirect(url_for('main.devices'))
+ db.session.delete(x);db.session.commit();flash('Device permanently deleted; asset history retained.','ok');return redirect(url_for('main.devices'))
+@bp.post('/assets/<int:i>/archive')
+@login_required
+def archive_asset(i):
+ a=Asset.query.filter_by(id=i,customer_id=tenant_id()).first_or_404();set_asset_archive(a,True)
+ for x in Device.query.filter_by(customer_id=tenant_id(),asset_id=a.id):x.active=False;x.api_token=secrets.token_urlsafe(32);set_device_archive(x,True)
+ db.session.commit();flash('Asset archived; devices disabled and tokens revoked.','ok');return redirect(url_for('main.dashboard'))
+@bp.get('/assets/archived')
+@login_required
+def archived_assets():
+ items=[x for x in Asset.query.filter_by(customer_id=tenant_id()).order_by(Asset.name) if archived_asset(x)];return render_template('archived_assets.html',items=items)
+@bp.post('/assets/<int:i>/restore')
+@login_required
+def restore_asset(i):
+ a=Asset.query.filter_by(id=i,customer_id=tenant_id()).first_or_404();set_asset_archive(a,False);db.session.commit();flash('Asset restored; devices remain archived.','ok');return redirect(url_for('main.asset_view',asset_id=a.id))
+@bp.get('/asset/<int:asset_id>/tracking')
+@login_required
+def tracking_history(asset_id):
+ a=Asset.query.filter_by(id=asset_id,customer_id=tenant_id()).first_or_404();now=utcnow();start=track_time(request.args.get('from'),now-timedelta(days=1));end=track_time(request.args.get('to'),now)
+ if end<start:start,end=end,start
+ if end-start>timedelta(days=31):start=end-timedelta(days=31)
+ rows=Location.query.filter(Location.customer_id==tenant_id(),Location.asset_id==a.id,Location.sampled_at>=start,Location.sampled_at<=end).order_by(Location.sampled_at).limit(5000).all();return render_template('tracking_history.html',asset=a,analysis=analyse_track(rows),start=start,end=end)
+@bp.get('/api/v1/assets/<int:asset_id>/tracking-history')
+@login_required
+def tracking_history_api(asset_id):
+ a=Asset.query.filter_by(id=asset_id,customer_id=tenant_id()).first_or_404();now=utcnow();start=track_time(request.args.get('from'),now-timedelta(days=1));end=track_time(request.args.get('to'),now);rows=Location.query.filter(Location.customer_id==tenant_id(),Location.asset_id==a.id,Location.sampled_at>=start,Location.sampled_at<=end).order_by(Location.sampled_at).limit(5000).all();return jsonify(asset={'id':a.id,'name':a.name},**analyse_track(rows))
+@bp.get('/asset/<int:asset_id>/tracking/export.csv')
+@login_required
+def tracking_csv(asset_id):
+ a=Asset.query.filter_by(id=asset_id,customer_id=tenant_id()).first_or_404();now=utcnow();start=track_time(request.args.get('from'),now-timedelta(days=1));end=track_time(request.args.get('to'),now);rows=Location.query.filter(Location.customer_id==tenant_id(),Location.asset_id==a.id,Location.sampled_at>=start,Location.sampled_at<=end).order_by(Location.sampled_at).limit(5000).all();f=io.StringIO();w=csv.writer(f);w.writerow(['asset','timestamp_utc','latitude','longitude','speed_kmh','heading','accuracy_m','sequence'])
+ for x in rows:w.writerow([a.name,aware(x.sampled_at).isoformat(),x.latitude,x.longitude,x.speed_kmh,x.heading,x.accuracy_m,x.sequence])
+ return f.getvalue(),200,{'Content-Type':'text/csv','Content-Disposition':f'attachment; filename="{slugify(a.name)}-tracking.csv"'}
 
 CONNECTOR_TYPES={
     'MQTT':{'label':'MQTT Broker','mode':'CLOUD_OR_EDGE','endpoint':'mqtts://broker.example:8883','implemented':'FOUNDATION'},
