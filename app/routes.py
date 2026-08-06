@@ -244,6 +244,23 @@ def asset_view(asset_id):
         if history:series.append({'key':signal.key,'label':signal.label,'unit':signal.unit or '','values':[{'time':aware(r.sampled_at).strftime('%H:%M'),'value':r.value} for r in history]})
     alarms=Alarm.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).order_by(desc(Alarm.opened_at)).limit(30).all();open_alarms=[a for a in alarms if a.state in ('OPEN','ACKNOWLEDGED')]
     device=Device.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,active=True).first();location=Location.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).order_by(desc(Location.sampled_at)).first();route=Location.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).order_by(desc(Location.sampled_at)).limit(200).all()[::-1]
+    phone_battery=None
+    if device and device.device_type=='MOBILE_WEB_TRACKER':
+        battery_signal=SignalDefinition.query.filter_by(asset_id=asset.id,key='battery_percent',enabled=True).first()
+        if battery_signal:
+            battery_rows=Reading.query.filter_by(signal_id=battery_signal.id).order_by(desc(Reading.sampled_at)).limit(48).all()[::-1]
+            values=[max(0.0,min(100.0,float(row.value))) for row in battery_rows]
+            if values:
+                charging_state='Not reported'
+                for capability in (device.capabilities or []):
+                    if str(capability).startswith('CHARGING:'):
+                        charging_state='Yes' if str(capability).split(':',1)[1].lower()=='true' else 'No'
+                phone_battery={
+                    'current':round(values[-1]),'minimum':round(min(values)),'maximum':round(max(values)),
+                    'change':round(values[-1]-values[0]),'charging':charging_state,
+                    'samples':[{'time':aware(row.sampled_at).strftime('%d %b %H:%M'),'value':round(max(0.0,min(100.0,float(row.value))))} for row in battery_rows],
+                }
+
     last='No telemetry received'
     if asset.last_seen:
         sec=max(0,int((now-aware(asset.last_seen)).total_seconds()));last='Just now' if sec<60 else f'{sec//60} min ago' if sec<3600 else f'{sec//3600} h ago' if sec<86400 else f'{sec//86400} d ago'
@@ -256,7 +273,7 @@ def asset_view(asset_id):
     vib=None
     if asset.asset_type=='VIBRATION':
         value=ctx['vibration'].value if ctx['vibration'] else None;vib={'rms':value,'temperature':ctx['temperature'].value if ctx['temperature'] else None,'condition':'CRITICAL' if value is not None and value>=7.1 else 'WARNING' if value is not None and value>=4.5 else 'HEALTHY' if value is not None else 'WAITING'}
-    return render_template('asset.html',asset=asset,signal_cards=cards,signal_lookup=lookup,chart_series=series,alarms=alarms,open_alarms=open_alarms,device=device,location=location,route_points=route,last_contact=last,generated_at=now,context=ctx,tank_stats=tank,tracking_stats=track,vibration_stats=vib)
+    return render_template('asset.html',asset=asset,signal_cards=cards,signal_lookup=lookup,chart_series=series,alarms=alarms,open_alarms=open_alarms,device=device,location=location,route_points=route,last_contact=last,generated_at=now,context=ctx,tank_stats=tank,tracking_stats=track,vibration_stats=vib,phone_battery=phone_battery)
 
 @bp.route('/asset/<int:asset_id>/signals',methods=['GET','POST'])
 @login_required
@@ -381,6 +398,10 @@ def mobile_tracker_location():
             sig=SignalDefinition(customer_id=device.customer_id,asset_id=device.asset_id,key='battery_percent',label='Phone Battery',signal_type='PERCENT',source_type='MOBILE',unit='%',widget='battery');db.session.add(sig);db.session.flush()
         bseq=f'{sequence}:battery'
         if not Reading.query.filter_by(signal_id=sig.id,sequence=bseq).first():db.session.add(Reading(customer_id=device.customer_id,asset_id=device.asset_id,signal_id=sig.id,sampled_at=sampled,value=max(0,min(100,float(battery))),unit='%',quality='GOOD',sequence=bseq))
+    charging=data.get('charging')
+    capabilities=[c for c in (device.capabilities or []) if not str(c).startswith('CHARGING:')]
+    capabilities.extend(['GPS','PHONE_BATTERY',f'CHARGING:{str(bool(charging)).lower()}'])
+    device.capabilities=list(dict.fromkeys(capabilities))
     device.last_seen=utcnow();device.asset.last_seen=sampled;device.firmware=str(data.get('client_version') or 'mobile-web-1.2')[:40]
     db.session.commit();return jsonify(status='accepted',sequence=sequence),202
 
