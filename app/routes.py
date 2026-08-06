@@ -71,6 +71,10 @@ def enforce_subscription_access():
 def health():
     return {"status": "ok", "service": "assettrack360-rev17"}
 
+@bp.get("/mobile-tracker")
+def mobile_tracker_page():
+    return render_template("mobile_tracker.html")
+
 
 @bp.get("/googleea2fb5a297eb0738.html")
 def google_site_verification():
