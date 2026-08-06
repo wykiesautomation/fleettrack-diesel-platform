@@ -3,7 +3,8 @@
 
   const API = {
     register: '/api/v1/mobile/register',
-    location: '/api/v1/mobile/location'
+    location: '/api/v1/mobile/location',
+    event: '/api/v1/mobile/event'
   };
   const STORAGE_KEY = 'at360_mobile_tracker_v1';
   let watchId = null;
@@ -62,6 +63,7 @@
   async function registerPhone() {
     const input = el('code');
     const code = (input?.value || '').trim().toUpperCase();
+    if (!el('consentCheck')?.checked) { log('Accept the privacy notice before registration.'); return; }
     if (!code || code.length < 8) {
       log('Enter the full one-time registration code.');
       input?.focus();
@@ -76,7 +78,7 @@
         cache: 'no-store',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-        body: JSON.stringify({ code })
+        body: JSON.stringify({ code, consent: el('consentCheck')?.checked === true, policy_version: '2026.1' })
       });
       const data = await safeJson(response);
       if (!response.ok) {
@@ -166,6 +168,11 @@
     }
   }
 
+  async function sendEvent(event) { const state=loadState(); if(!state)return false; try{const response=await fetch(API.event,{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${state.token}`},body:JSON.stringify({event})});return response.ok;}catch{return false;} }
+  async function withdrawConsent(){stopTracking(false);if(await sendEvent('CONSENT_WITHDRAWN')){localStorage.removeItem(STORAGE_KEY);showRegistration();log('Consent withdrawn. Uploads are blocked until a new registration.');}}
+  async function unregisterPhone(){if(!confirm('Unregister this phone and revoke its token?'))return;stopTracking(false);await sendEvent('UNREGISTERED');localStorage.removeItem(STORAGE_KEY);showRegistration();log('Phone unregistered and token revoked.');}
+  async function requestDataDeletion(){if(await sendEvent('DATA_DELETION_REQUESTED'))log('Tracking data deletion request submitted for review.');}
+  function clearLocalTrackerData(){stopTracking(false);localStorage.removeItem(STORAGE_KEY);showRegistration();log('Local tracker data cleared.');}
   function startTracking() {
     if (!loadState()) {
       showRegistration();
@@ -191,10 +198,11 @@
     }
     el('startBtn')?.classList.add('hidden');
     el('stopBtn')?.classList.remove('hidden');
+    sendEvent('TRACKING_STARTED');
     log('Tracking started by the phone user.');
   }
 
-  function stopTracking() {
+  function stopTracking(notify = true) {
     if (watchId !== null) navigator.geolocation.clearWatch(watchId);
     watchId = null;
     if (el('statusPill')) {
@@ -203,6 +211,7 @@
     }
     el('startBtn')?.classList.remove('hidden');
     el('stopBtn')?.classList.add('hidden');
+    if(notify) sendEvent('TRACKING_STOPPED');
     log('Tracking stopped.');
   }
 
@@ -215,6 +224,7 @@
   window.stopTracking = stopTracking;
   window.clearLog = clearLog;
   window.flushQueue = flushQueue;
+  window.withdrawConsent=withdrawConsent;window.unregisterPhone=unregisterPhone;window.requestDataDeletion=requestDataDeletion;window.clearLocalTrackerData=clearLocalTrackerData;
 
   document.addEventListener('DOMContentLoaded', () => {
     const button = el('registerBtn');
