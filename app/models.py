@@ -243,3 +243,35 @@ class MqttTopicMapping(db.Model):
  id=db.Column(db.Integer,primary_key=True);customer_id=db.Column(db.Integer,nullable=False,index=True);connector_id=db.Column(db.Integer,nullable=False,index=True);subscription_id=db.Column(db.Integer,db.ForeignKey('mqtt_subscription.id'),nullable=False,index=True);asset_id=db.Column(db.Integer,db.ForeignKey('asset.id'),nullable=False);signal_id=db.Column(db.Integer,db.ForeignKey('signal_definition.id'),nullable=False);json_path=db.Column(db.String(240),default='value');timestamp_path=db.Column(db.String(240));quality_path=db.Column(db.String(240));scale=db.Column(db.Float,default=1.0);offset=db.Column(db.Float,default=0.0);enabled=db.Column(db.Boolean,default=True);last_value=db.Column(db.Float);last_quality=db.Column(db.String(20));last_message_at=db.Column(db.DateTime(timezone=True));last_error=db.Column(db.String(500));subscription=db.relationship('MqttSubscription');asset=db.relationship('Asset');signal=db.relationship('SignalDefinition')
 class MqttMessageEvent(db.Model):
  id=db.Column(db.BigInteger,primary_key=True);customer_id=db.Column(db.Integer,nullable=False,index=True);connector_id=db.Column(db.Integer,nullable=False,index=True);topic=db.Column(db.String(300),nullable=False);payload_size=db.Column(db.Integer,default=0);mapped_points=db.Column(db.Integer,default=0);status=db.Column(db.String(20));detail=db.Column(db.String(500));received_at=db.Column(db.DateTime(timezone=True),default=now)
+
+
+class MobileConsent(db.Model):
+    id=db.Column(db.Integer,primary_key=True)
+    customer_id=db.Column(db.Integer,nullable=False,index=True);asset_id=db.Column(db.Integer,nullable=False,index=True);device_id=db.Column(db.Integer,index=True)
+    device_uid=db.Column(db.String(100),nullable=False,index=True);policy_version=db.Column(db.String(30),nullable=False,default='2026.1')
+    active=db.Column(db.Boolean,default=True,nullable=False,index=True);accepted_at=db.Column(db.DateTime(timezone=True),default=now,nullable=False)
+    withdrawn_at=db.Column(db.DateTime(timezone=True));last_tracking_started_at=db.Column(db.DateTime(timezone=True));last_tracking_stopped_at=db.Column(db.DateTime(timezone=True))
+    user_agent_summary=db.Column(db.String(240));created_at=db.Column(db.DateTime(timezone=True),default=now,nullable=False)
+
+class SecurityAuditEvent(db.Model):
+    id=db.Column(db.BigInteger,primary_key=True);customer_id=db.Column(db.Integer,nullable=False,index=True);asset_id=db.Column(db.Integer,index=True);device_id=db.Column(db.Integer,index=True)
+    event_type=db.Column(db.String(60),nullable=False,index=True);actor_type=db.Column(db.String(30),nullable=False,default='SYSTEM');actor_id=db.Column(db.Integer)
+    safe_summary=db.Column(db.String(500));source_ip=db.Column(db.String(80));created_at=db.Column(db.DateTime(timezone=True),default=now,nullable=False,index=True)
+
+class AssetAlertSettings(db.Model):
+    id=db.Column(db.Integer,primary_key=True);customer_id=db.Column(db.Integer,nullable=False,index=True);asset_id=db.Column(db.Integer,nullable=False,unique=True,index=True)
+    battery_warning=db.Column(db.Float,default=20,nullable=False);battery_critical=db.Column(db.Float,default=10,nullable=False);battery_recovered=db.Column(db.Float,default=25,nullable=False)
+    offline_warning_minutes=db.Column(db.Integer,default=5,nullable=False);offline_critical_minutes=db.Column(db.Integer,default=15,nullable=False)
+    gps_accuracy_limit_m=db.Column(db.Float,default=50,nullable=False);speed_warning_kmh=db.Column(db.Float,default=100,nullable=False);speed_critical_kmh=db.Column(db.Float,default=120,nullable=False);extended_stop_minutes=db.Column(db.Integer,default=30,nullable=False)
+    battery_enabled=db.Column(db.Boolean,default=True,nullable=False);offline_enabled=db.Column(db.Boolean,default=True,nullable=False);gps_enabled=db.Column(db.Boolean,default=True,nullable=False);speed_enabled=db.Column(db.Boolean,default=True,nullable=False);extended_stop_enabled=db.Column(db.Boolean,default=True,nullable=False)
+    updated_at=db.Column(db.DateTime(timezone=True),default=now,onupdate=now,nullable=False);updated_by=db.Column(db.Integer)
+
+class CoreAlarmState(db.Model):
+    id=db.Column(db.Integer,primary_key=True);customer_id=db.Column(db.Integer,nullable=False,index=True);asset_id=db.Column(db.Integer,nullable=False,index=True);condition_key=db.Column(db.String(80),nullable=False)
+    alarm_id=db.Column(db.Integer,index=True);active=db.Column(db.Boolean,default=True,nullable=False,index=True);severity=db.Column(db.String(20),nullable=False);last_value=db.Column(db.Float)
+    opened_at=db.Column(db.DateTime(timezone=True),default=now,nullable=False);last_seen_at=db.Column(db.DateTime(timezone=True),default=now,nullable=False);recovered_at=db.Column(db.DateTime(timezone=True))
+    __table_args__=(db.UniqueConstraint('asset_id','condition_key',name='uq_asset_alarm_condition'),)
+
+class DataDeletionRequest(db.Model):
+    id=db.Column(db.Integer,primary_key=True);customer_id=db.Column(db.Integer,nullable=False,index=True);asset_id=db.Column(db.Integer,nullable=False,index=True);device_id=db.Column(db.Integer,index=True)
+    request_type=db.Column(db.String(40),default='TRACKING_DATA',nullable=False);state=db.Column(db.String(30),default='REQUESTED',nullable=False,index=True);requested_at=db.Column(db.DateTime(timezone=True),default=now,nullable=False);reviewed_at=db.Column(db.DateTime(timezone=True));reviewed_by=db.Column(db.Integer);note=db.Column(db.String(500))

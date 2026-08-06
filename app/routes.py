@@ -6,8 +6,9 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import desc
 from . import db
 from .payfast import config as payfast_config,build_checkout,event_hash,valid_signature,valid_source,server_validate,forwarded_ip
-from .models import Customer,User,Site,Asset,Device,SignalDefinition,Reading,Alarm,Location,WorkspaceProfile,SubscriptionPlan,Subscription,PaymentRecord,PayFastEvent,SubscriptionAuditEvent,IntegrationConnector,IntegrationSignalMapping,IntegrationEvent,ConnectorEndpointConfig,UniversalSourceMapping,WebhookReceipt,EdgeGateway,IntegrationJobEvent,MqttSubscription,MqttTopicMapping,MqttMessageEvent,MobileTrackerRegistration
+from .models import Customer,User,Site,Asset,Device,SignalDefinition,Reading,Alarm,Location,WorkspaceProfile,SubscriptionPlan,Subscription,PaymentRecord,PayFastEvent,SubscriptionAuditEvent,IntegrationConnector,IntegrationSignalMapping,IntegrationEvent,ConnectorEndpointConfig,UniversalSourceMapping,WebhookReceipt,EdgeGateway,IntegrationJobEvent,MqttSubscription,MqttTopicMapping,MqttMessageEvent,MobileTrackerRegistration,MobileConsent,SecurityAuditEvent,AssetAlertSettings,CoreAlarmState,DataDeletionRequest
 from .route_intelligence import match_route, reverse_geocode, route_quality
+from .security_privacy import POLICY_VERSION,audit,consent_for_device,settings_for,evaluate_mobile
 bp=Blueprint('main',__name__)
 
 def utcnow(): return datetime.now(timezone.utc)
@@ -404,6 +405,7 @@ def mobile_tracker_setup():
 @bp.post('/api/v1/mobile/register')
 def mobile_tracker_register():
     data=request.get_json(silent=True) or {};code=str(data.get('code','')).strip().upper()
+    if data.get('consent') is not True or str(data.get('policy_version',''))!=POLICY_VERSION:return jsonify(error='explicit_location_consent_required',policy_version=POLICY_VERSION),422
     if not code:return jsonify(error='registration_code_required'),400
     reg=MobileTrackerRegistration.query.filter_by(code_hash=mobile_code_hash(code),used_at=None).first()
     if not reg:return jsonify(error='invalid_registration_code'),404
@@ -411,7 +413,8 @@ def mobile_tracker_register():
     if Device.query.filter_by(customer_id=reg.customer_id,asset_id=reg.asset_id,device_type='MOBILE_WEB_TRACKER',active=True).first():return jsonify(error='mobile_tracker_already_registered'),409
     token=secrets.token_urlsafe(36)
     device=Device(customer_id=reg.customer_id,asset_id=reg.asset_id,device_uid=reg.device_uid,device_type='MOBILE_WEB_TRACKER',api_token=token,active=True,firmware='mobile-web-1.2',capabilities=['GPS','PHONE_BATTERY','USER_CONSENT_REQUIRED'])
-    reg.used_at=utcnow();db.session.add(device)
+    reg.used_at=utcnow();db.session.add(device);db.session.flush()
+    consent=MobileConsent(customer_id=reg.customer_id,asset_id=reg.asset_id,device_id=device.id,device_uid=device.device_uid,policy_version=POLICY_VERSION,active=True,user_agent_summary=(request.headers.get('User-Agent') or '')[:240]);db.session.add(consent);audit(reg.customer_id,'CONSENT_ACCEPTED',reg.asset_id,device.id,'DEVICE',None,'Explicit location consent accepted');audit(reg.customer_id,'PHONE_REGISTERED',reg.asset_id,device.id,'DEVICE',None,'Mobile tracker registered')
     if not SignalDefinition.query.filter_by(asset_id=reg.asset_id,key='battery_percent').first():
         db.session.add(SignalDefinition(customer_id=reg.customer_id,asset_id=reg.asset_id,key='battery_percent',label='Phone Battery',signal_type='PERCENT',source_type='MOBILE',unit='%',widget='battery'))
     db.session.commit()
@@ -421,6 +424,8 @@ def mobile_tracker_register():
 def mobile_tracker_location():
     device=mobile_tracker_device()
     if not device:return jsonify(error='invalid_mobile_tracker_token'),401
+    consent=consent_for_device(device)
+    if not consent or not consent.active:return jsonify(error='consent_inactive'),403
     allowed,subscription=entitlement_for(device.customer_id)
     if not allowed:return jsonify(error='subscription_inactive'),402
     data=request.get_json(silent=True) or {};sequence=str(data.get('sequence','')).strip()
@@ -445,6 +450,7 @@ def mobile_tracker_location():
     capabilities=[c for c in (device.capabilities or []) if not str(c).startswith('CHARGING:')]
     capabilities.extend(['GPS','PHONE_BATTERY',f'CHARGING:{str(bool(charging)).lower()}'])
     device.capabilities=list(dict.fromkeys(capabilities))
+    evaluate_mobile(device,data)
     device.last_seen=utcnow();device.asset.last_seen=sampled;device.firmware=str(data.get('client_version') or 'mobile-web-1.2')[:40]
     db.session.commit();return jsonify(status='accepted',sequence=sequence),202
 
@@ -454,6 +460,40 @@ def mobile_tracker_status():
     if not device:return jsonify(error='invalid_mobile_tracker_token'),401
     latest=Location.query.filter_by(customer_id=device.customer_id,asset_id=device.asset_id).order_by(desc(Location.sampled_at)).first()
     return jsonify(status='ok',device_uid=device.device_uid,asset_name=device.asset.name,last_contact=device.last_seen.isoformat() if device.last_seen else None,last_position={'latitude':latest.latitude,'longitude':latest.longitude,'sampled_at':latest.sampled_at.isoformat(),'accuracy_m':latest.accuracy_m} if latest else None)
+
+@bp.post('/api/v1/mobile/event')
+def mobile_event():
+    device=mobile_tracker_device()
+    if not device:return jsonify(error='invalid_mobile_tracker_token'),401
+    data=request.get_json(silent=True) or {};event=str(data.get('event','')).upper();consent=consent_for_device(device)
+    if event=='TRACKING_STARTED':
+        if not consent or not consent.active:return jsonify(error='consent_inactive'),403
+        consent.last_tracking_started_at=utcnow();audit(device.customer_id,event,device.asset_id,device.id,'DEVICE',None,'Tracking started by phone user')
+    elif event=='TRACKING_STOPPED':
+        if consent:consent.last_tracking_stopped_at=utcnow()
+        audit(device.customer_id,event,device.asset_id,device.id,'DEVICE',None,'Tracking stopped by phone user')
+    elif event=='CONSENT_WITHDRAWN':
+        if consent:consent.active=False;consent.withdrawn_at=utcnow()
+        audit(device.customer_id,event,device.asset_id,device.id,'DEVICE',None,'Location consent withdrawn')
+    elif event=='UNREGISTERED':
+        if consent:consent.active=False;consent.withdrawn_at=utcnow()
+        device.active=False;device.api_token=secrets.token_urlsafe(36);audit(device.customer_id,event,device.asset_id,device.id,'DEVICE',None,'Phone unregistered and token revoked')
+    elif event=='DATA_DELETION_REQUESTED':
+        db.session.add(DataDeletionRequest(customer_id=device.customer_id,asset_id=device.asset_id,device_id=device.id));audit(device.customer_id,event,device.asset_id,device.id,'DEVICE',None,'Tracking data deletion review requested')
+    else:return jsonify(error='unsupported_event'),422
+    db.session.commit();return jsonify(status='accepted'),202
+
+@bp.route('/asset/<int:asset_id>/alert-settings',methods=['GET','POST'])
+@login_required
+def alert_settings(asset_id):
+    asset=Asset.query.filter_by(id=asset_id,customer_id=tenant_id()).first_or_404();cfg=settings_for(asset)
+    if request.method=='POST':
+        cfg.battery_warning=max(5,min(95,float(request.form.get('battery_warning') or 20)));cfg.battery_critical=max(1,min(cfg.battery_warning,float(request.form.get('battery_critical') or 10)));cfg.battery_recovered=max(cfg.battery_warning,min(100,float(request.form.get('battery_recovered') or 25)))
+        cfg.offline_warning_minutes=max(1,min(1440,int(request.form.get('offline_warning_minutes') or 5)));cfg.offline_critical_minutes=max(cfg.offline_warning_minutes,min(2880,int(request.form.get('offline_critical_minutes') or 15)))
+        cfg.gps_accuracy_limit_m=max(10,min(1000,float(request.form.get('gps_accuracy_limit_m') or 50)));cfg.speed_warning_kmh=max(10,min(250,float(request.form.get('speed_warning_kmh') or 100)));cfg.speed_critical_kmh=max(cfg.speed_warning_kmh,min(300,float(request.form.get('speed_critical_kmh') or 120)));cfg.extended_stop_minutes=max(5,min(1440,int(request.form.get('extended_stop_minutes') or 30)))
+        for key in ('battery','offline','gps','speed','extended_stop'):setattr(cfg,key+'_enabled',request.form.get(key+'_enabled')=='on')
+        cfg.updated_by=current_user.id;audit(asset.customer_id,'ALERT_SETTINGS_CHANGED',asset.id,None,'USER',current_user.id,'Vehicle alert settings updated');db.session.commit();flash('Alert settings saved.','ok');return redirect(url_for('main.alert_settings',asset_id=asset.id))
+    return render_template('alert_settings.html',asset=asset,cfg=cfg)
 
 @bp.get('/devices')
 @login_required
@@ -478,12 +518,9 @@ def devices():
                 last_contact = f'{age_seconds // 3600} h ago'
             else:
                 last_contact = f'{age_seconds // 86400} d ago'
-        items.append({
-            'device': record,
-            'asset': record.asset,
-            'online': online,
-            'last_contact': last_contact,
-        })
+        consent=MobileConsent.query.filter_by(customer_id=tenant_id(),device_uid=record.device_uid).order_by(MobileConsent.id.desc()).first()
+        battery_sig=SignalDefinition.query.filter_by(asset_id=record.asset_id,key='battery_percent').first();battery=latest_reading(battery_sig.id) if battery_sig else None
+        items.append({'device':record,'asset':record.asset,'online':online,'last_contact':last_contact,'consent':consent,'battery':battery})
     new_token = session.pop('new_device_token', None)
     new_token_device = session.pop('new_device_uid', None)
     return render_template(
@@ -522,6 +559,7 @@ def rotate_device_token(device_id):
         customer_id=tenant_id(),
     ).first_or_404()
     record.api_token = secrets.token_urlsafe(32)
+    audit(record.customer_id,'TOKEN_ROTATED',record.asset_id,record.id,'USER',current_user.id,'Device token rotated')
     db.session.commit()
     session['new_device_token'] = record.api_token
     session['new_device_uid'] = record.device_uid
@@ -537,6 +575,7 @@ def toggle_device(device_id):
         customer_id=tenant_id(),
     ).first_or_404()
     record.active = not record.active
+    audit(record.customer_id,'DEVICE_ENABLED' if record.active else 'DEVICE_DISABLED',record.asset_id,record.id,'USER',current_user.id,'Device state changed')
     db.session.commit()
     flash(
         f'Device {"enabled" if record.active else "disabled"}.',
