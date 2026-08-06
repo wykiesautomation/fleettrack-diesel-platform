@@ -1,9 +1,12 @@
 import os
+import time
+from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
 
 from flask import Flask, jsonify, request, send_from_directory
 from flask_login import LoginManager
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 from werkzeug.security import generate_password_hash
 
@@ -11,6 +14,33 @@ from werkzeug.security import generate_password_hash
 db = SQLAlchemy()
 login_manager = LoginManager()
 login_manager.login_view = "main.login"
+
+@contextmanager
+def schema_creation_lock(app):
+    database_url=app.config["SQLALCHEMY_DATABASE_URI"]
+    if database_url.startswith("sqlite"):
+        import fcntl
+        os.makedirs(app.instance_path,exist_ok=True)
+        with open(os.path.join(app.instance_path,"assettrack360-schema.lock"),"w",encoding="utf-8") as lock_file:
+            fcntl.flock(lock_file.fileno(),fcntl.LOCK_EX)
+            try:yield
+            finally:fcntl.flock(lock_file.fileno(),fcntl.LOCK_UN)
+    else:
+        with db.engine.connect() as connection:
+            connection.execute(text("SELECT pg_advisory_lock(:key)"),{"key":3602026})
+            try:yield
+            finally:
+                connection.execute(text("SELECT pg_advisory_unlock(:key)"),{"key":3602026});connection.commit()
+
+def create_schema_safely(app):
+    with schema_creation_lock(app):
+        for attempt in range(3):
+            try:db.create_all();return
+            except OperationalError as error:
+                db.session.rollback()
+                if "already exists" in str(error).lower():return
+                if attempt==2:raise
+                time.sleep(1+attempt)
 
 
 def create_app(test_config=None):
@@ -84,7 +114,7 @@ def create_app(test_config=None):
 
     with app.app_context():
         from . import edge_models  # Registers REV20A tables before create_all.
-        db.create_all()
+        create_schema_safely(app)
 
         email = os.getenv("BOOTSTRAP_ADMIN_EMAIL", "").strip().lower()
         password = os.getenv("BOOTSTRAP_ADMIN_PASSWORD", "")
