@@ -7,6 +7,7 @@ from sqlalchemy import desc
 from . import db
 from .payfast import config as payfast_config,build_checkout,event_hash,valid_signature,valid_source,server_validate,forwarded_ip
 from .models import Customer,User,Site,Asset,Device,SignalDefinition,Reading,Alarm,Location,WorkspaceProfile,SubscriptionPlan,Subscription,PaymentRecord,PayFastEvent,SubscriptionAuditEvent,IntegrationConnector,IntegrationSignalMapping,IntegrationEvent,ConnectorEndpointConfig,UniversalSourceMapping,WebhookReceipt,EdgeGateway,IntegrationJobEvent,MqttSubscription,MqttTopicMapping,MqttMessageEvent,MobileTrackerRegistration
+from .route_intelligence import match_route, reverse_geocode, route_quality
 bp=Blueprint('main',__name__)
 
 def utcnow(): return datetime.now(timezone.utc)
@@ -314,7 +315,8 @@ def asset_view(asset_id):
     if asset.asset_type=='VIBRATION':
         value=ctx['vibration'].value if ctx['vibration'] else None;vib={'rms':value,'temperature':ctx['temperature'].value if ctx['temperature'] else None,'condition':'CRITICAL' if value is not None and value>=7.1 else 'WARNING' if value is not None and value>=4.5 else 'HEALTHY' if value is not None else 'WAITING'}
     vehicle_summary=vehicle_day_summary(asset,device,now) if asset.asset_type=='TRACKER' else None
-    return render_template('asset.html',asset=asset,signal_cards=cards,signal_lookup=lookup,chart_series=series,alarms=alarms,open_alarms=open_alarms,device=device,location=location,route_points=route,last_contact=last,generated_at=now,context=ctx,tank_stats=tank,tracking_stats=track,vibration_stats=vib,phone_battery=phone_battery,vehicle_summary=vehicle_summary)
+    route_health=route_quality(route) if asset.asset_type=='TRACKER' else None
+    return render_template('asset.html',asset=asset,signal_cards=cards,signal_lookup=lookup,chart_series=series,alarms=alarms,open_alarms=open_alarms,device=device,location=location,route_points=route,last_contact=last,generated_at=now,context=ctx,tank_stats=tank,tracking_stats=track,vibration_stats=vib,phone_battery=phone_battery,vehicle_summary=vehicle_summary,route_health=route_health)
 
 @bp.route('/asset/<int:asset_id>/signals',methods=['GET','POST'])
 @login_required
@@ -898,6 +900,22 @@ def ingest():
     loc=payload.get('location') or {}
     if loc.get('latitude') is not None and loc.get('longitude') is not None:db.session.add(Location(customer_id=device.customer_id,asset_id=asset.id,sampled_at=sampled,latitude=float(loc['latitude']),longitude=float(loc['longitude']),speed_kmh=loc.get('speed_kmh'),accuracy_m=loc.get('accuracy_m'),heading=loc.get('heading'),sequence=sequence))
     device.last_seen=utcnow();asset.last_seen=utcnow();device.firmware=payload.get('firmware',device.firmware);db.session.commit();return jsonify(status='accepted',points=accepted),202
+
+@bp.get('/api/v1/assets/<int:asset_id>/route-intelligence')
+@login_required
+def route_intelligence_api(asset_id):
+    asset=Asset.query.filter_by(id=asset_id,customer_id=tenant_id()).first_or_404()
+    rows=Location.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).order_by(desc(Location.sampled_at)).limit(200).all()[::-1]
+    matched=match_route(rows);quality=route_quality(rows)
+    return jsonify(route=matched,quality=quality)
+
+@bp.get('/api/v1/reverse-geocode')
+@login_required
+def reverse_geocode_api():
+    try:lat=float(request.args['lat']);lon=float(request.args['lon'])
+    except (KeyError,TypeError,ValueError):return jsonify(error='valid_lat_lon_required'),400
+    if not (-90<=lat<=90 and -180<=lon<=180):return jsonify(error='coordinates_out_of_range'),400
+    return jsonify(reverse_geocode(lat,lon))
 
 @bp.get('/api/v1/assets/<int:asset_id>/latest')
 @login_required
