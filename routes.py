@@ -1,4 +1,4 @@
-import os, secrets, re, csv, io, math
+import os, secrets, re, hashlib
 from datetime import datetime, timezone, timedelta
 from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify, abort, session, current_app, send_from_directory
 from flask_login import login_user, logout_user, login_required, current_user
@@ -6,7 +6,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import desc
 from . import db
 from .payfast import config as payfast_config,build_checkout,event_hash,valid_signature,valid_source,server_validate,forwarded_ip
-from .models import Customer,User,Site,Asset,Device,SignalDefinition,Reading,Alarm,Location,WorkspaceProfile,SubscriptionPlan,Subscription,PaymentRecord,PayFastEvent,SubscriptionAuditEvent,IntegrationConnector,IntegrationSignalMapping,IntegrationEvent,ConnectorEndpointConfig,UniversalSourceMapping,WebhookReceipt,EdgeGateway,IntegrationJobEvent,MqttSubscription,MqttTopicMapping,MqttMessageEvent,DeviceConfiguration,DeviceCommand
+from .models import Customer,User,Site,Asset,Device,SignalDefinition,Reading,Alarm,Location,WorkspaceProfile,SubscriptionPlan,Subscription,PaymentRecord,PayFastEvent,SubscriptionAuditEvent,IntegrationConnector,IntegrationSignalMapping,IntegrationEvent,ConnectorEndpointConfig,UniversalSourceMapping,WebhookReceipt,EdgeGateway,IntegrationJobEvent,MqttSubscription,MqttTopicMapping,MqttMessageEvent,MobileTrackerRegistration
 bp=Blueprint('main',__name__)
 
 def utcnow(): return datetime.now(timezone.utc)
@@ -19,60 +19,19 @@ def parse_time(v):
 def aware(value):
     if not value:return None
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
-def clean_imei(v):
- x=re.sub(r'\D','',str(v or ''));return x if len(x)==15 else ''
-def caps(x):return list(x.capabilities or [])
-def device_archived(x):return 'ARCHIVED' in caps(x)
-def set_device_archive(x,v):x.capabilities=[z for z in caps(x) if z!='ARCHIVED']+(['ARCHIVED'] if v else [])
-def asset_meta(x):return dict(x.metadata_json or {})
-def asset_archived(x):return bool(asset_meta(x).get('archived'))
-def set_asset_archive(x,v):
- m=asset_meta(x)
- if v:m.update({'archived':True,'archived_at':utcnow().isoformat(),'archived_by':current_user.id})
- else:[m.pop(k,None) for k in ('archived','archived_at','archived_by')]
- x.metadata_json=m
-def auth_device():
- t=request.headers.get('Authorization','').removeprefix('Bearer ').strip();return Device.query.filter_by(api_token=t,active=True).first() if t else None
-def config_for(x):
- c=DeviceConfiguration.query.filter_by(device_id=x.id).first()
- if not c:c=DeviceConfiguration(customer_id=x.customer_id,device_id=x.id);db.session.add(c);db.session.flush()
- return c
-def identity_check(x,data):
- if str(data.get('device_id','')).strip().upper()!=x.device_uid.upper():return jsonify(error='device_identity_mismatch'),403
- imei=clean_imei(data.get('imei'))
- if x.device_type in ('ESP32_SIM868','ESP32_LTE_CAT1') and not imei:return jsonify(error='imei_required'),400
- if imei:
-  x.reported_imei=imei;x.identity_checked_at=utcnow();x.last_ip=request.remote_addr
-  if not x.expected_imei:x.imei_status='PENDING_APPROVAL';x.device_state='WAITING';db.session.commit();return jsonify(code='IMEI_APPROVAL_REQUIRED',reported_imei=imei),409
-  if not secrets.compare_digest(x.expected_imei,imei):x.imei_status='MISMATCH';x.device_state='QUARANTINED';x.quarantine_reason='Reported IMEI does not match approved modem';db.session.commit();return jsonify(error='imei_mismatch',device_state='QUARANTINED'),403
-  x.imei_status='MATCHED';x.device_state='ONLINE';x.quarantine_reason=None
- if device_archived(x) or x.device_state in ('QUARANTINED','SUSPENDED','TOKEN_REVOKED','RETIRED'):return jsonify(error='device_not_allowed',device_state=x.device_state),403
- return None
-def track_time(v,f):
- try:
-  d=datetime.fromisoformat(v.replace('Z','+00:00')) if v else f;return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
- except:return f
-def hkm(a,b,c,d):
- R=6371.0088;p1=math.radians(a);p2=math.radians(c);q=math.sin(math.radians(c-a)/2)**2+math.cos(p1)*math.cos(p2)*math.sin(math.radians(d-b)/2)**2;return 2*R*math.asin(math.sqrt(q))
-def analyse(rows):
- pts=[];dist=mx=move=stop=0;gaps=0;stops=[];prev=None;ss=None;slat=slon=None
- for x in rows:
-  t=aware(x.sampled_at);v=max(0,float(x.speed_kmh or 0));pts.append({'timestamp':t.isoformat(),'latitude':x.latitude,'longitude':x.longitude,'speed_kmh':v,'heading':x.heading,'accuracy_m':x.accuracy_m});mx=max(mx,v)
-  if prev:
-   sec=max(0,(t-prev[0]).total_seconds());seg=hkm(prev[1],prev[2],x.latitude,x.longitude)
-   if seg<=max(2,sec/3600*220+.5):dist+=seg
-   if sec>900:gaps+=1
-   if sec<=1800:
-    if v>=3:move+=sec
-    else:stop+=sec
-  if v<3:
-   if ss is None:ss=t;slat=x.latitude;slon=x.longitude
-  elif ss:
-   dur=(t-ss).total_seconds()
-   if dur>=300:stops.append({'start':ss.isoformat(),'duration_minutes':round(dur/60),'latitude':slat,'longitude':slon})
-   ss=None
-  prev=(t,x.latitude,x.longitude)
- return {'points':pts,'distance_km':round(dist,2),'max_speed':round(mx,1),'moving_minutes':round(move/60),'stopped_minutes':round(stop/60),'gap_count':gaps,'stops':stops,'last':pts[-1] if pts else None}
+def mobile_code_hash(value):
+    return hashlib.sha256(str(value).strip().upper().encode('utf-8')).hexdigest()
+
+def mobile_device_token():
+    return secrets.token_urlsafe(36)
+
+def mobile_tracker_device():
+    token=request.headers.get('Authorization','').removeprefix('Bearer ').strip()
+    if not token:return None
+    return Device.query.filter_by(api_token=token,active=True,device_type='MOBILE_WEB_TRACKER').first()
+
+def valid_coordinate(latitude,longitude):
+    return -90<=latitude<=90 and -180<=longitude<=180
 def latest_reading(signal_id):
     return Reading.query.filter_by(signal_id=signal_id).order_by(desc(Reading.sampled_at)).first()
 def asset_status(asset):
@@ -244,9 +203,7 @@ def public_home():
 @bp.get('/dashboard')
 @login_required
 def dashboard():
-    all_assets=Asset.query.filter_by(customer_id=tenant_id()).order_by(Asset.name).all()
-    assets=[x for x in all_assets if not asset_archived(x)]
-    archived_asset_count=sum(1 for x in all_assets if asset_archived(x))
+    assets=Asset.query.filter_by(customer_id=tenant_id()).order_by(Asset.name).all()
     sites=Site.query.filter_by(customer_id=tenant_id()).order_by(Site.name).all()
     devices=Device.query.filter_by(customer_id=tenant_id(),active=True).all()
     now=utcnow(); counts={'HEALTHY':0,'WARNING':0,'CRITICAL':0,'OFFLINE':0}; cards=[]; attention=[]; mapped=[]
@@ -279,7 +236,7 @@ def dashboard():
     online=sum(1 for d in devices if d.last_seen and now-aware(d.last_seen)<=timedelta(minutes=30))
     connectivity={'online':online,'offline':max(0,len(devices)-online),'online_percent':online/len(devices)*100 if devices else 0,'firmware_reported':sum(1 for d in devices if d.firmware),'unassigned':sum(1 for a in assets if not any(d.asset_id==a.id for d in devices))}
     tank={'count':tank_count,'capacity':tank_capacity,'volume':tank_volume,'percent':tank_volume/tank_capacity*100 if tank_capacity else 0,'low_count':low_count}
-    return render_template('dashboard.html',assets=assets,sites=sites,site_count=len(sites),device_count=len(devices),counts=counts,asset_cards=cards,attention_items=attention,mapped_assets=mapped,tank_summary=tank,connectivity=connectivity,recent_events=recent,generated_at=now,archived_asset_count=archived_asset_count)
+    return render_template('dashboard.html',assets=assets,sites=sites,site_count=len(sites),device_count=len(devices),counts=counts,asset_cards=cards,attention_items=attention,mapped_assets=mapped,tank_summary=tank,connectivity=connectivity,recent_events=recent,generated_at=now)
 
 @bp.get('/asset/<int:asset_id>')
 @login_required
@@ -369,6 +326,116 @@ def account():
     )
 
 
+@bp.post('/asset/<int:asset_id>/mobile-tracker/create')
+@login_required
+def create_mobile_tracker(asset_id):
+    asset=Asset.query.filter_by(id=asset_id,customer_id=tenant_id()).first_or_404()
+    existing=Device.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,device_type='MOBILE_WEB_TRACKER',active=True).first()
+    if existing:
+        flash('This asset already has an active Mobile Web Tracker.', 'error')
+        return redirect(url_for('main.asset_view',asset_id=asset.id))
+    code='-'.join([secrets.token_hex(2).upper(),secrets.token_hex(2).upper()])
+    uid=f'AT360-PHONE-{asset.id:06d}'
+    registration=MobileTrackerRegistration(
+        customer_id=tenant_id(),asset_id=asset.id,code_hash=mobile_code_hash(code),
+        device_uid=uid,expires_at=utcnow()+timedelta(minutes=30),created_by=current_user.id,
+    )
+    db.session.add(registration);db.session.commit()
+    session['mobile_registration_code']=code
+    session['mobile_registration_asset']=asset.name
+    flash('Mobile tracker registration code created. It expires in 30 minutes.', 'ok')
+    return redirect(url_for('main.mobile_tracker_setup'))
+
+@bp.get('/mobile-tracker/setup')
+@login_required
+def mobile_tracker_setup():
+    code=session.pop('mobile_registration_code',None)
+    asset_name=session.pop('mobile_registration_asset',None)
+    return render_template('mobile_tracker_setup.html',code=code,asset_name=asset_name)
+
+@bp.get('/mobile-tracker')
+def mobile_tracker_page():
+    return render_template('mobile_tracker.html')
+
+@bp.post('/api/v1/mobile/register')
+def mobile_tracker_register():
+    data=request.get_json(silent=True) or {}
+    code=str(data.get('code','')).strip().upper()
+    if not code:return jsonify(error='registration_code_required'),400
+    registration=MobileTrackerRegistration.query.filter_by(code_hash=mobile_code_hash(code),used_at=None).first()
+    if not registration:return jsonify(error='invalid_registration_code'),404
+    if utcnow()>aware(registration.expires_at):return jsonify(error='registration_code_expired'),410
+    existing=Device.query.filter_by(customer_id=registration.customer_id,asset_id=registration.asset_id,device_type='MOBILE_WEB_TRACKER',active=True).first()
+    if existing:return jsonify(error='mobile_tracker_already_registered'),409
+    token=mobile_device_token()
+    device=Device(
+        customer_id=registration.customer_id,asset_id=registration.asset_id,
+        device_uid=registration.device_uid,device_type='MOBILE_WEB_TRACKER',
+        api_token=token,active=True,firmware='mobile-web-1.0',
+        capabilities=['GPS','MOBILE_DATA','USER_CONSENT_REQUIRED'],
+    )
+    registration.used_at=utcnow();db.session.add(device);db.session.commit()
+    return jsonify(status='registered',device_uid=device.device_uid,device_token=token,asset_name=device.asset.name),201
+
+@bp.post('/api/v1/mobile/location')
+def mobile_tracker_location():
+    device=mobile_tracker_device()
+    if not device:return jsonify(error='invalid_mobile_tracker_token'),401
+    allowed,subscription=entitlement_for(device.customer_id)
+    if not allowed:return jsonify(error='subscription_inactive',state=subscription.state if subscription else 'MISSING'),402
+    data=request.get_json(silent=True) or {}
+    if str(data.get('device_id','')).strip().upper()!=device.device_uid.upper():return jsonify(error='device_identity_mismatch'),403
+    sequence=str(data.get('sequence','')).strip()
+    if not sequence:return jsonify(error='sequence_required'),400
+    if Location.query.filter_by(asset_id=device.asset_id,sequence=sequence).first():return jsonify(status='duplicate',sequence=sequence),200
+    try:
+        latitude=float(data['latitude']);longitude=float(data['longitude'])
+        speed=max(0.0,float(data.get('speed_kmh') or 0.0))
+        accuracy=max(0.0,float(data.get('accuracy_m') or 0.0))
+        heading=float(data['heading']) if data.get('heading') is not None else None
+    except (KeyError,TypeError,ValueError):return jsonify(error='invalid_location_payload'),400
+    if not valid_coordinate(latitude,longitude) or speed>300:return jsonify(error='location_out_of_range'),400
+    sampled=parse_time(data.get('timestamp'))
+    db.session.add(Location(
+        customer_id=device.customer_id,asset_id=device.asset_id,sampled_at=sampled,
+        latitude=latitude,longitude=longitude,speed_kmh=speed,
+        accuracy_m=accuracy,heading=heading,sequence=sequence,
+    ))
+    device.last_seen=utcnow();device.firmware=str(data.get('client_version') or device.firmware)[:40]
+    device.asset.last_seen=sampled;db.session.commit()
+    return jsonify(status='accepted',sequence=sequence,sampled_at=sampled.isoformat()),202
+
+@bp.post('/api/v1/mobile/location/batch')
+def mobile_tracker_location_batch():
+    device=mobile_tracker_device()
+    if not device:return jsonify(error='invalid_mobile_tracker_token'),401
+    allowed,subscription=entitlement_for(device.customer_id)
+    if not allowed:return jsonify(error='subscription_inactive'),402
+    data=request.get_json(silent=True) or {};points=data.get('points') or []
+    if not isinstance(points,list) or not points or len(points)>100:return jsonify(error='invalid_batch',max_points=100),400
+    accepted=[];duplicates=[];rejected=[]
+    for item in points:
+        sequence=str((item or {}).get('sequence','')).strip()
+        if not sequence:rejected.append({'sequence':None,'reason':'sequence_required'});continue
+        if Location.query.filter_by(asset_id=device.asset_id,sequence=sequence).first():duplicates.append(sequence);continue
+        try:
+            latitude=float(item['latitude']);longitude=float(item['longitude']);speed=max(0.0,float(item.get('speed_kmh') or 0.0));accuracy=max(0.0,float(item.get('accuracy_m') or 0.0));heading=float(item['heading']) if item.get('heading') is not None else None
+        except (KeyError,TypeError,ValueError):rejected.append({'sequence':sequence,'reason':'invalid_payload'});continue
+        if not valid_coordinate(latitude,longitude) or speed>300:rejected.append({'sequence':sequence,'reason':'out_of_range'});continue
+        sampled=parse_time(item.get('timestamp'))
+        db.session.add(Location(customer_id=device.customer_id,asset_id=device.asset_id,sampled_at=sampled,latitude=latitude,longitude=longitude,speed_kmh=speed,accuracy_m=accuracy,heading=heading,sequence=sequence));accepted.append(sequence)
+    if accepted:
+        device.last_seen=utcnow();device.asset.last_seen=utcnow()
+    db.session.commit()
+    return jsonify(status='batch_processed',accepted=accepted,duplicates=duplicates,rejected=rejected),202
+
+@bp.get('/api/v1/mobile/status')
+def mobile_tracker_status():
+    device=mobile_tracker_device()
+    if not device:return jsonify(error='invalid_mobile_tracker_token'),401
+    latest=Location.query.filter_by(customer_id=device.customer_id,asset_id=device.asset_id).order_by(desc(Location.sampled_at)).first()
+    return jsonify(status='ok',device_uid=device.device_uid,asset_name=device.asset.name,last_contact=device.last_seen.isoformat() if device.last_seen else None,last_position={'latitude':latest.latitude,'longitude':latest.longitude,'sampled_at':latest.sampled_at.isoformat(),'accuracy_m':latest.accuracy_m} if latest else None)
+
 @bp.get('/devices')
 @login_required
 def devices():
@@ -438,82 +505,6 @@ def toggle_device(device_id):
     )
     return redirect(url_for('main.devices'))
 
-
-@bp.post('/devices/<int:i>/archive')
-@login_required
-def archive_device(i):
- x=Device.query.filter_by(id=i,customer_id=tenant_id()).first_or_404();x.active=False;x.api_token=secrets.token_urlsafe(32);set_device_archive(x,True);db.session.commit();flash('Device archived and token revoked.','ok');return redirect(url_for('main.devices'))
-@bp.post('/devices/<int:i>/restore')
-@login_required
-def restore_device(i):
- x=Device.query.filter_by(id=i,customer_id=tenant_id()).first_or_404();set_device_archive(x,False);x.active=False;x.api_token=secrets.token_urlsafe(32);db.session.commit();flash('Device restored in Disabled state.','ok');return redirect(url_for('main.devices'))
-@bp.post('/devices/<int:i>/approve-imei')
-@login_required
-def approve_imei(i):
- x=Device.query.filter_by(id=i,customer_id=tenant_id()).first_or_404();imei=clean_imei(x.reported_imei)
- if not imei:flash('No valid reported IMEI.','error');return redirect(url_for('main.devices'))
- x.expected_imei=imei;x.imei_status='MATCHED';x.device_state='WAITING';x.imei_bound_at=utcnow();db.session.commit();flash('IMEI approved and bound.','ok');return redirect(url_for('main.devices'))
-@bp.post('/assets/<int:i>/archive')
-@login_required
-def archive_asset(i):
- a=Asset.query.filter_by(id=i,customer_id=tenant_id()).first_or_404();set_asset_archive(a,True)
- for x in Device.query.filter_by(customer_id=tenant_id(),asset_id=a.id):x.active=False;x.api_token=secrets.token_urlsafe(32);set_device_archive(x,True)
- db.session.commit();flash('Asset archived; linked tokens revoked.','ok');return redirect(url_for('main.dashboard'))
-@bp.get('/assets/archived')
-@login_required
-def archived_assets():return render_template('archived_assets.html',items=[x for x in Asset.query.filter_by(customer_id=tenant_id()).order_by(Asset.name) if asset_archived(x)])
-@bp.post('/assets/<int:i>/restore')
-@login_required
-def restore_asset(i):
- a=Asset.query.filter_by(id=i,customer_id=tenant_id()).first_or_404();set_asset_archive(a,False);db.session.commit();flash('Asset restored; devices remain archived.','ok');return redirect(url_for('main.asset_view',asset_id=a.id))
-@bp.get('/asset/<int:asset_id>/tracking')
-@login_required
-def tracking_history(asset_id):
- a=Asset.query.filter_by(id=asset_id,customer_id=tenant_id()).first_or_404();now=utcnow();start=track_time(request.args.get('from'),now-timedelta(days=1));end=track_time(request.args.get('to'),now);rows=Location.query.filter(Location.customer_id==tenant_id(),Location.asset_id==a.id,Location.sampled_at>=start,Location.sampled_at<=end).order_by(Location.sampled_at).limit(5000).all();return render_template('tracking_history.html',asset=a,analysis=analyse(rows),start=start,end=end)
-@bp.post('/api/v1/ingest/batch')
-def ingest_batch():
- x=auth_device()
- if not x:return jsonify(error='invalid_device_token'),401
- allowed,sub=entitlement_for(x.customer_id)
- if not allowed:return jsonify(error='subscription_inactive'),402
- body=request.get_json(silent=True) or {};err=identity_check(x,body)
- if err:return err
- samples=body.get('samples') or []
- if not isinstance(samples,list) or not samples or len(samples)>100:return jsonify(error='invalid_batch',max_samples=100),400
- accepted=[]
- for sample in samples:
-  seq=str(sample.get('sequence','')).strip()
-  if not seq:continue
-  ts=parse_time(sample.get('timestamp'))
-  for item in sample.get('measurements',[]):
-   sig=SignalDefinition.query.filter_by(asset_id=x.asset_id,key=item.get('point'),enabled=True).first()
-   if not sig:continue
-   key=f'{seq}:{sig.key}'
-   if Reading.query.filter_by(signal_id=sig.id,sequence=key).first():continue
-   try:raw=float(item.get('value'));value=scale_signal(sig,raw)
-   except:continue
-   db.session.add(Reading(customer_id=x.customer_id,asset_id=x.asset_id,signal_id=sig.id,sampled_at=ts,value=value,raw_value=raw,unit=sig.unit,quality=item.get('quality','GOOD'),sequence=key));accepted.append(seq)
-  loc=sample.get('location') or {}
-  if loc.get('latitude') is not None and loc.get('longitude') is not None:db.session.add(Location(customer_id=x.customer_id,asset_id=x.asset_id,sampled_at=ts,latitude=float(loc['latitude']),longitude=float(loc['longitude']),speed_kmh=loc.get('speed_kmh'),accuracy_m=loc.get('accuracy_m'),heading=loc.get('heading'),sequence=f'{seq}:location'))
- x.last_seen=utcnow();x.asset.last_seen=utcnow();db.session.commit();return jsonify(status='batch_processed',accepted_sequences=list(dict.fromkeys(accepted))),202
-@bp.get('/api/v1/device/config')
-def device_config_get():
- x=auth_device()
- if not x:return jsonify(error='invalid_device_token'),401
- err=identity_check(x,request.args)
- if err:return err
- c=config_for(x);cmds=DeviceCommand.query.filter_by(device_id=x.id,status='PENDING').order_by(DeviceCommand.id).limit(20).all()
- for q in cmds:q.status='DELIVERED';q.delivered_at=utcnow()
- db.session.commit();return jsonify(revision=c.revision,tank_capacity_l=c.tank_capacity_l,tank_height_mm=c.tank_height_mm,tank_shape=c.tank_shape,empty_ma=c.empty_ma,full_ma=c.full_ma,low_alarm_percent=c.low_alarm_percent,critical_alarm_percent=c.critical_alarm_percent,rapid_drop_percent=c.rapid_drop_percent,moving_interval_seconds=c.moving_interval_seconds,parked_interval_seconds=c.parked_interval_seconds,commands=[{'id':q.id,'type':q.command_type,'payload':q.payload} for q in cmds])
-@bp.post('/api/v1/device/config/ack')
-def device_config_ack():
- x=auth_device()
- if not x:return jsonify(error='invalid_device_token'),401
- data=request.get_json(silent=True) or {};err=identity_check(x,data)
- if err:return err
- c=config_for(x);status=str(data.get('status','')).upper();rev=int(data.get('revision') or 0)
- if status not in ('APPLIED','REJECTED') or rev<1:return jsonify(error='invalid_ack'),400
- c.applied_revision=rev;c.apply_status=status;c.apply_detail=str(data.get('detail',''))[:240];c.acknowledged_at=utcnow();db.session.commit();return jsonify(status='acknowledged'),200
 
 CONNECTOR_TYPES={
     'MQTT':{'label':'MQTT Broker','mode':'CLOUD_OR_EDGE','endpoint':'mqtts://broker.example:8883','implemented':'FOUNDATION'},
@@ -856,8 +847,7 @@ def ingest():
     allowed,subscription=entitlement_for(device.customer_id)
     if not allowed:return jsonify(error='subscription_inactive',state=subscription.state if subscription else 'MISSING',billing_url='/billing'),402
     payload=request.get_json(silent=True) or {}
-    identity_error=identity_check(device,payload)
-    if identity_error:return identity_error
+    if payload.get('device_id') and payload['device_id']!=device.device_uid:return jsonify(error='device_id mismatch'),403
     sampled=parse_time(payload.get('timestamp'));sequence=str(payload.get('sequence',''))
     accepted=[]; asset=device.asset
     for item in payload.get('measurements',[]):

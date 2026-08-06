@@ -35,20 +35,19 @@ class Device(db.Model):
     asset_id=db.Column(db.Integer,db.ForeignKey('asset.id'),nullable=False,index=True); device_uid=db.Column(db.String(100),unique=True,nullable=False,index=True)
     device_type=db.Column(db.String(60),default='UNIVERSAL'); api_token=db.Column(db.String(100),unique=True,nullable=False,index=True)
     active=db.Column(db.Boolean,default=True); last_seen=db.Column(db.DateTime(timezone=True)); firmware=db.Column(db.String(40)); capabilities=db.Column(db.JSON,default=list)
-    expected_imei=db.Column(db.String(15),unique=True,index=True); reported_imei=db.Column(db.String(15),index=True)
-    imei_status=db.Column(db.String(30),default='NOT_BOUND',nullable=False,index=True); device_state=db.Column(db.String(30),default='WAITING',nullable=False,index=True)
-    imei_bound_at=db.Column(db.DateTime(timezone=True)); identity_checked_at=db.Column(db.DateTime(timezone=True)); quarantine_reason=db.Column(db.String(240)); last_ip=db.Column(db.String(80))
     asset=db.relationship('Asset')
-class DeviceConfiguration(db.Model):
-    id=db.Column(db.Integer,primary_key=True);customer_id=db.Column(db.Integer,db.ForeignKey('customer.id'),nullable=False,index=True);device_id=db.Column(db.Integer,db.ForeignKey('device.id'),nullable=False,unique=True,index=True)
-    revision=db.Column(db.Integer,default=1,nullable=False);applied_revision=db.Column(db.Integer,default=0,nullable=False);apply_status=db.Column(db.String(30),default='PENDING',nullable=False)
-    tank_capacity_l=db.Column(db.Float);tank_height_mm=db.Column(db.Float);tank_shape=db.Column(db.String(40),default='RECTANGULAR');empty_ma=db.Column(db.Float,default=4.0);full_ma=db.Column(db.Float,default=20.0)
-    low_alarm_percent=db.Column(db.Float,default=20.0);critical_alarm_percent=db.Column(db.Float,default=10.0);rapid_drop_percent=db.Column(db.Float,default=5.0);moving_interval_seconds=db.Column(db.Integer,default=60);parked_interval_seconds=db.Column(db.Integer,default=600)
-    calibration_points=db.Column(db.JSON,default=list);apply_detail=db.Column(db.String(240));acknowledged_at=db.Column(db.DateTime(timezone=True));updated_at=db.Column(db.DateTime(timezone=True),default=now,onupdate=now)
-    device=db.relationship('Device')
-class DeviceCommand(db.Model):
-    id=db.Column(db.BigInteger,primary_key=True);customer_id=db.Column(db.Integer,nullable=False,index=True);device_id=db.Column(db.Integer,db.ForeignKey('device.id'),nullable=False,index=True)
-    command_type=db.Column(db.String(50),nullable=False);payload=db.Column(db.JSON,default=dict);status=db.Column(db.String(30),default='PENDING',nullable=False,index=True);result_detail=db.Column(db.String(240));created_at=db.Column(db.DateTime(timezone=True),default=now);delivered_at=db.Column(db.DateTime(timezone=True));acknowledged_at=db.Column(db.DateTime(timezone=True))
+
+class MobileTrackerRegistration(db.Model):
+    id=db.Column(db.Integer,primary_key=True)
+    customer_id=db.Column(db.Integer,db.ForeignKey('customer.id'),nullable=False,index=True)
+    asset_id=db.Column(db.Integer,db.ForeignKey('asset.id'),nullable=False,index=True)
+    code_hash=db.Column(db.String(64),nullable=False,unique=True,index=True)
+    device_uid=db.Column(db.String(100),nullable=False,index=True)
+    expires_at=db.Column(db.DateTime(timezone=True),nullable=False,index=True)
+    used_at=db.Column(db.DateTime(timezone=True))
+    created_by=db.Column(db.Integer,db.ForeignKey('user.id'),nullable=False)
+    created_at=db.Column(db.DateTime(timezone=True),default=now,nullable=False)
+    asset=db.relationship('Asset')
 
 class SignalDefinition(db.Model):
     id=db.Column(db.Integer,primary_key=True); customer_id=db.Column(db.Integer,db.ForeignKey('customer.id'),nullable=False,index=True)
