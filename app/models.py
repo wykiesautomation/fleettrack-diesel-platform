@@ -38,17 +38,7 @@ class Device(db.Model):
     asset=db.relationship('Asset')
 
 class MobileTrackerRegistration(db.Model):
-    id=db.Column(db.Integer,primary_key=True)
-    customer_id=db.Column(db.Integer,db.ForeignKey('customer.id'),nullable=False,index=True)
-    asset_id=db.Column(db.Integer,db.ForeignKey('asset.id'),nullable=False,index=True)
-    code_hash=db.Column(db.String(64),nullable=False,unique=True,index=True)
-    device_uid=db.Column(db.String(100),nullable=False,index=True)
-    expires_at=db.Column(db.DateTime(timezone=True),nullable=False,index=True)
-    used_at=db.Column(db.DateTime(timezone=True))
-    created_by=db.Column(db.Integer,db.ForeignKey('user.id'),nullable=False)
-    created_at=db.Column(db.DateTime(timezone=True),default=now,nullable=False)
-    asset=db.relationship('Asset')
-
+    id=db.Column(db.Integer,primary_key=True);customer_id=db.Column(db.Integer,db.ForeignKey('customer.id'),nullable=False,index=True);asset_id=db.Column(db.Integer,db.ForeignKey('asset.id'),nullable=False,index=True);code_hash=db.Column(db.String(64),nullable=False,unique=True,index=True);device_uid=db.Column(db.String(100),nullable=False,index=True);expires_at=db.Column(db.DateTime(timezone=True),nullable=False,index=True);used_at=db.Column(db.DateTime(timezone=True));created_by=db.Column(db.Integer,db.ForeignKey('user.id'),nullable=False);created_at=db.Column(db.DateTime(timezone=True),default=now,nullable=False);asset=db.relationship('Asset')
 class SignalDefinition(db.Model):
     id=db.Column(db.Integer,primary_key=True); customer_id=db.Column(db.Integer,db.ForeignKey('customer.id'),nullable=False,index=True)
     asset_id=db.Column(db.Integer,db.ForeignKey('asset.id'),nullable=False,index=True); key=db.Column(db.String(80),nullable=False)
