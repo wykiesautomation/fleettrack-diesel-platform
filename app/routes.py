@@ -31,28 +31,10 @@ def route_distance_km(points):
             if segment<=plausible and not(segment<=accuracy and float(point.speed_kmh or 0)<3):total+=segment
         previous=point
     return round(total,1)
-def display_route_points(points):
-    accepted=[];previous=None
-    for point in points:
-        if previous is None:
-            accepted.append(point);previous=point;continue
-        elapsed=max(1,(aware(point.sampled_at)-aware(previous.sampled_at)).total_seconds())
-        if elapsed>1800:
-            accepted.append(None);accepted.append(point);previous=point;continue
-        segment=route_distance_km([previous,point])
-        accuracy=max(float(previous.accuracy_m or 0),float(point.accuracy_m or 0))/1000
-        speed=max(float(previous.speed_kmh or 0),float(point.speed_kmh or 0))
-        if segment<=accuracy and speed<3:continue
-        if segment>max(0.25,elapsed/3600*220+0.1):continue
-        accepted.append(point);previous=point
-    return accepted
-
 def vehicle_day_summary(asset,device,now):
     start=now.replace(hour=0,minute=0,second=0,microsecond=0)
     points=Location.query.filter(Location.customer_id==asset.customer_id,Location.asset_id==asset.id,Location.sampled_at>=start).order_by(Location.sampled_at).limit(2000).all()
     moving=stopped=0.0;stops=[];previous=None;stop_start=None;stop_point=None;maximum=0.0
-    online=bool(device and device.active and device.last_seen and now-aware(device.last_seen)<=timedelta(minutes=5))
-    last_confirmed=aware(points[-1].sampled_at) if points else None
     for point in points:
         speed=max(0.0,float(point.speed_kmh or 0));maximum=max(maximum,speed)
         if previous:
@@ -64,25 +46,64 @@ def vehicle_day_summary(asset,device,now):
             if stop_start is None:stop_start=aware(point.sampled_at);stop_point=point
         elif stop_start is not None:
             duration=(aware(point.sampled_at)-stop_start).total_seconds()
-            if duration>=300:stops.append({'started':stop_start.strftime('%H:%M'),'ended':aware(point.sampled_at).strftime('%H:%M'),'minutes':round(duration/60),'latitude':stop_point.latitude,'longitude':stop_point.longitude,'tracking_lost':False})
+            if duration>=300:stops.append({'started':stop_start.strftime('%H:%M'),'ended':aware(point.sampled_at).strftime('%H:%M'),'minutes':round(duration/60),'latitude':stop_point.latitude,'longitude':stop_point.longitude})
             stop_start=None;stop_point=None
         previous=point
-    if stop_start and last_confirmed:
-        duration=max(0,(last_confirmed-stop_start).total_seconds())
-        if duration>=300:
-            stops.append({'started':stop_start.strftime('%H:%M'),'ended':last_confirmed.strftime('%H:%M'),'minutes':round(duration/60),'latitude':stop_point.latitude,'longitude':stop_point.longitude,'tracking_lost':not online})
-    # Summary uses exactly the same confirmed stop durations as the stop list.
-    confirmed_stop_minutes=sum(stop['minutes'] for stop in stops)
+    if stop_start and points:
+        duration=(aware(points[-1].sampled_at)-stop_start).total_seconds()
+        if duration>=300:stops.append({'started':stop_start.strftime('%H:%M'),'ended':'Now','minutes':round(duration/60),'latitude':stop_point.latitude,'longitude':stop_point.longitude})
     timeline=[]
     if points:
         timeline.append({'time':aware(points[0].sampled_at).strftime('%H:%M'),'title':'First position received','detail':'Tracking started for today'})
-        for stop in stops[-4:]:
-            detail=f"{stop['minutes']} min confirmed stop"
-            if stop['tracking_lost']:detail+=' · tracking lost after '+stop['ended']
-            timeline.append({'time':stop['started'],'title':'Vehicle stopped','detail':detail})
-        timeline.append({'time':last_confirmed.strftime('%H:%M'),'title':'Latest position received','detail':f"{float(points[-1].speed_kmh or 0):.0f} km/h"});timeline.sort(key=lambda x:x['time'])
-    speed=float(points[-1].speed_kmh or 0) if points else 0.0
-    return {'online':online,'motion':'MOVING' if speed>=3 else 'PARKED','tracking':'ACTIVE' if online else 'INACTIVE','distance_km':route_distance_km(points),'moving_minutes':round(moving/60),'stopped_minutes':confirmed_stop_minutes,'stop_count':len(stops),'max_speed_kmh':round(maximum),'stops':stops[-6:][::-1],'timeline':timeline[-8:][::-1]}
+        for stop in stops[-4:]:timeline.append({'time':stop['started'],'title':'Vehicle stopped','detail':f"{stop['minutes']} min stop"})
+        timeline.append({'time':aware(points[-1].sampled_at).strftime('%H:%M'),'title':'Latest position received','detail':f"{float(points[-1].speed_kmh or 0):.0f} km/h"});timeline.sort(key=lambda x:x['time'])
+    online=bool(device and device.active and device.last_seen and now-aware(device.last_seen)<=timedelta(minutes=5));speed=float(points[-1].speed_kmh or 0) if points else 0.0
+    return {'online':online,'motion':'MOVING' if speed>=3 else 'PARKED','tracking':'ACTIVE' if online else 'INACTIVE','distance_km':route_distance_km(points),'moving_minutes':round(moving/60),'stopped_minutes':round(stopped/60),'stop_count':len(stops),'max_speed_kmh':round(maximum),'stops':stops[-6:][::-1],'timeline':timeline[-8:][::-1]}
+def mobile_code_hash(value):
+    return hashlib.sha256(str(value).strip().upper().encode('utf-8')).hexdigest()
+def mobile_tracker_device():
+    token=request.headers.get('Authorization','').removeprefix('Bearer ').strip()
+    return Device.query.filter_by(api_token=token,active=True,device_type='MOBILE_WEB_TRACKER').first() if token else None
+def latest_reading(signal_id):
+    return Reading.query.filter_by(signal_id=signal_id).order_by(desc(Reading.sampled_at)).first()
+def asset_status(asset):
+    if not asset.last_seen or utcnow()-asset.last_seen.replace(tzinfo=asset.last_seen.tzinfo or timezone.utc)>timedelta(minutes=30): return 'OFFLINE'
+    open_alarm=Alarm.query.filter_by(customer_id=asset.customer_id,asset_id=asset.id,state='OPEN').order_by(desc(Alarm.severity)).first()
+    return open_alarm.severity if open_alarm else 'HEALTHY'
+def scale_signal(sig,raw):
+    if sig.source_type!='4-20mA': return raw
+    span=sig.raw_max-sig.raw_min
+    return sig.eng_min if span==0 else sig.eng_min+(raw-sig.raw_min)*(sig.eng_max-sig.eng_min)/span
+
+def evaluate_alarm(sig,value):
+    severity=None; msg=None
+    if sig.critical_low is not None and value<=sig.critical_low: severity='CRITICAL';msg=f'{sig.label} critical low'
+    elif sig.critical_high is not None and value>=sig.critical_high: severity='CRITICAL';msg=f'{sig.label} critical high'
+    elif sig.warning_low is not None and value<=sig.warning_low: severity='WARNING';msg=f'{sig.label} warning low'
+    elif sig.warning_high is not None and value>=sig.warning_high: severity='WARNING';msg=f'{sig.label} warning high'
+    existing=Alarm.query.filter_by(customer_id=sig.customer_id,asset_id=sig.asset_id,signal_id=sig.id,state='OPEN').first()
+    if severity and not existing: db.session.add(Alarm(customer_id=sig.customer_id,asset_id=sig.asset_id,signal_id=sig.id,severity=severity,message=msg,value=value))
+    elif severity and existing: existing.severity=severity;existing.message=msg;existing.value=value
+    elif existing: existing.state='CLOSED';existing.note=(existing.note or '')+' Auto-closed after return to normal.'
+
+ALLOWED_BILLING_ENDPOINTS={'main.public_home','main.login','main.logout','main.register','main.health','main.billing','main.plans','main.select_plan','main.billing_checkout','main.billing_success','main.billing_cancel','main.payfast_notify','main.subscription_required','static'}
+
+def set_subscription_state(sub,new_state,reason):
+    if sub.state!=new_state:
+        db.session.add(SubscriptionAuditEvent(customer_id=sub.customer_id,subscription_id=sub.id,previous_state=sub.state,new_state=new_state,reason=reason));sub.state=new_state;db.session.commit()
+
+def refresh_subscription(sub):
+    now=utcnow()
+    if sub.state=='TRIAL' and sub.trial_ends_at and now>aware(sub.trial_ends_at):set_subscription_state(sub,'SUSPENDED','Trial expired without successful payment')
+    elif sub.state=='ACTIVE' and sub.current_period_end and now>aware(sub.current_period_end):
+        sub.grace_ends_at=now+timedelta(days=3);set_subscription_state(sub,'GRACE_PERIOD','Paid period ended; three-day grace period started')
+    elif sub.state=='GRACE_PERIOD' and sub.grace_ends_at and now>aware(sub.grace_ends_at):set_subscription_state(sub,'SUSPENDED','Grace period expired')
+    return sub
+
+def entitlement_for(customer_id):
+    sub=Subscription.query.filter_by(customer_id=customer_id).first()
+    if not sub:return False,None
+    refresh_subscription(sub);return sub.state in ('TRIAL','ACTIVE','GRACE_PERIOD'),sub
 
 @bp.before_app_request
 def enforce_subscription_access():
@@ -262,7 +283,7 @@ def asset_view(asset_id):
         latest=latest_reading(signal.id);history=Reading.query.filter_by(signal_id=signal.id).order_by(desc(Reading.sampled_at)).limit(48).all()[::-1];lookup[signal.key]=latest;cards.append({'signal':signal,'latest':latest,'history':history})
         if history:series.append({'key':signal.key,'label':signal.label,'unit':signal.unit or '','values':[{'time':aware(r.sampled_at).strftime('%H:%M'),'value':r.value} for r in history]})
     alarms=Alarm.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).order_by(desc(Alarm.opened_at)).limit(30).all();open_alarms=[a for a in alarms if a.state in ('OPEN','ACKNOWLEDGED')]
-    device=Device.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,active=True).first();location=Location.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).order_by(desc(Location.sampled_at)).first();route=Location.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).order_by(desc(Location.sampled_at)).limit(200).all()[::-1];display_route=display_route_points(route)
+    device=Device.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,active=True).first();location=Location.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).order_by(desc(Location.sampled_at)).first();route=Location.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).order_by(desc(Location.sampled_at)).limit(200).all()[::-1]
     phone_battery=None
     if device and device.device_type=='MOBILE_WEB_TRACKER':
         battery_signal=SignalDefinition.query.filter_by(asset_id=asset.id,key='battery_percent',enabled=True).first()
@@ -293,7 +314,7 @@ def asset_view(asset_id):
     if asset.asset_type=='VIBRATION':
         value=ctx['vibration'].value if ctx['vibration'] else None;vib={'rms':value,'temperature':ctx['temperature'].value if ctx['temperature'] else None,'condition':'CRITICAL' if value is not None and value>=7.1 else 'WARNING' if value is not None and value>=4.5 else 'HEALTHY' if value is not None else 'WAITING'}
     vehicle_summary=vehicle_day_summary(asset,device,now) if asset.asset_type=='TRACKER' else None
-    return render_template('asset.html',asset=asset,signal_cards=cards,signal_lookup=lookup,chart_series=series,alarms=alarms,open_alarms=open_alarms,device=device,location=location,route_points=route,display_route_points=display_route,last_contact=last,generated_at=now,context=ctx,tank_stats=tank,tracking_stats=track,vibration_stats=vib,phone_battery=phone_battery,vehicle_summary=vehicle_summary)
+    return render_template('asset.html',asset=asset,signal_cards=cards,signal_lookup=lookup,chart_series=series,alarms=alarms,open_alarms=open_alarms,device=device,location=location,route_points=route,last_contact=last,generated_at=now,context=ctx,tank_stats=tank,tracking_stats=track,vibration_stats=vib,phone_battery=phone_battery,vehicle_summary=vehicle_summary)
 
 @bp.route('/asset/<int:asset_id>/signals',methods=['GET','POST'])
 @login_required
