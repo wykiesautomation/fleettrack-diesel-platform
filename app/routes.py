@@ -41,27 +41,7 @@ def evaluate_alarm(sig,value):
     elif severity and existing: existing.severity=severity;existing.message=msg;existing.value=value
     elif existing: existing.state='CLOSED';existing.note=(existing.note or '')+' Auto-closed after return to normal.'
 
-ALLOWED_BILLING_ENDPOINTS={'main.public_home','main.login','main.logout','main.register','main.health','main.billing','main.plans','main.select_plan','main.billing_checkout','main.billing_success','main.billing_cancel','main.payfast_notify','static'}
-
-BILLING_TERMS={
-    'MONTHLY':{'months':1,'price_multiplier':1.0,'discount_percent':0},
-    'ANNUAL':{'months':12,'price_multiplier':10.8,'discount_percent':10},
-    'THREE_YEAR':{'months':36,'price_multiplier':28.8,'discount_percent':20},
-}
-
-def billing_term_spec(value):
-    return BILLING_TERMS.get(str(value or '').upper(),BILLING_TERMS['MONTHLY'])
-
-def paid_period_end(start,months):
-    # Commercial terms use calendar-safe fixed periods: 30, 365, or 1095 days.
-    return start+timedelta(days={1:30,12:365,36:1095}.get(months,30))
-
-def subscription_is_entitled(sub):
-    now=utcnow()
-    if sub.state=='TRIAL':return bool(sub.trial_ends_at and now<=aware(sub.trial_ends_at))
-    if sub.state=='ACTIVE':return bool(sub.paid_until and now<=aware(sub.paid_until))
-    if sub.state=='GRACE_PERIOD':return bool(sub.grace_ends_at and now<=aware(sub.grace_ends_at))
-    return False
+ALLOWED_BILLING_ENDPOINTS={'main.public_home','main.login','main.logout','main.register','main.health','main.billing','main.plans','main.select_plan','main.billing_checkout','main.billing_success','main.billing_cancel','main.payfast_notify','main.subscription_required','static'}
 
 def set_subscription_state(sub,new_state,reason):
     if sub.state!=new_state:
@@ -69,20 +49,16 @@ def set_subscription_state(sub,new_state,reason):
 
 def refresh_subscription(sub):
     now=utcnow()
-    if sub.state=='TRIAL' and sub.trial_ends_at and now>aware(sub.trial_ends_at):
-        set_subscription_state(sub,'SUSPENDED','Trial expired without successful payment')
-    elif sub.state=='ACTIVE' and sub.paid_until and now>aware(sub.paid_until):
-        sub.current_period_end=sub.paid_until
-        sub.grace_ends_at=aware(sub.paid_until)+timedelta(days=3)
-        set_subscription_state(sub,'GRACE_PERIOD','Paid entitlement ended; three-day grace period started')
-    elif sub.state=='GRACE_PERIOD' and sub.grace_ends_at and now>aware(sub.grace_ends_at):
-        set_subscription_state(sub,'SUSPENDED','Grace period expired')
+    if sub.state=='TRIAL' and sub.trial_ends_at and now>aware(sub.trial_ends_at):set_subscription_state(sub,'SUSPENDED','Trial expired without successful payment')
+    elif sub.state=='ACTIVE' and sub.current_period_end and now>aware(sub.current_period_end):
+        sub.grace_ends_at=now+timedelta(days=3);set_subscription_state(sub,'GRACE_PERIOD','Paid period ended; three-day grace period started')
+    elif sub.state=='GRACE_PERIOD' and sub.grace_ends_at and now>aware(sub.grace_ends_at):set_subscription_state(sub,'SUSPENDED','Grace period expired')
     return sub
 
 def entitlement_for(customer_id):
     sub=Subscription.query.filter_by(customer_id=customer_id).first()
     if not sub:return False,None
-    refresh_subscription(sub);return subscription_is_entitled(sub),sub
+    refresh_subscription(sub);return sub.state in ('TRIAL','ACTIVE','GRACE_PERIOD'),sub
 
 @bp.before_app_request
 def enforce_subscription_access():
@@ -638,7 +614,7 @@ def select_plan(plan_id):
 @login_required
 def billing():
     sub=Subscription.query.filter_by(customer_id=tenant_id()).first_or_404();refresh_subscription(sub);payments=PaymentRecord.query.filter_by(customer_id=tenant_id()).order_by(desc(PaymentRecord.created_at)).limit(30).all();days=max(0,(aware(sub.trial_ends_at)-utcnow()).days) if sub.trial_ends_at and sub.state=='TRIAL' else None
-    return render_template('billing.html',subscription=sub,payments=payments,active_devices=Device.query.filter_by(customer_id=tenant_id(),active=True).count(),days_left=days,payfast_mode=payfast_config()['mode'],billing_terms=BILLING_TERMS)
+    return render_template('billing.html',subscription=sub,payments=payments,active_devices=Device.query.filter_by(customer_id=tenant_id(),active=True).count(),days_left=days,payfast_mode=payfast_config()['mode'])
 
 @bp.post('/billing/checkout')
 @login_required
@@ -646,13 +622,7 @@ def billing_checkout():
     cfg=payfast_config();sub=Subscription.query.filter_by(customer_id=tenant_id()).first_or_404()
     if not cfg['merchant_id'] or not cfg['merchant_key']:flash('PayFast is not configured.','error');return redirect(url_for('main.billing'))
     if sub.plan.monthly_price<=0:flash('Industrial plan requires a quote.','error');return redirect(url_for('main.billing'))
-    term=str(request.form.get('billing_term') or sub.billing_term or 'MONTHLY').upper()
-    if term not in BILLING_TERMS:term='MONTHLY'
-    spec=BILLING_TERMS[term];amount=round(float(sub.plan.monthly_price)*spec['price_multiplier'],2)
-    sub.billing_term=term;sub.auto_renew='auto_renew' in request.form if term=='MONTHLY' else False
-    ref=f'AT360-{tenant_id()}-{sub.id}-{secrets.token_hex(6).upper()}'
-    payment=PaymentRecord(customer_id=tenant_id(),subscription_id=sub.id,merchant_payment_id=ref,amount_gross=amount,status='PENDING',billing_term=term,term_months=spec['months'],raw_summary={'billing_term':term,'term_months':spec['months'],'discount_percent':spec['discount_percent']})
-    db.session.add(payment);db.session.commit();endpoint,fields=build_checkout(sub,payment,current_user,cfg);return render_template('payfast_redirect.html',endpoint=endpoint,fields=fields,payment=payment)
+    ref=f'AT360-{tenant_id()}-{sub.id}-{secrets.token_hex(6).upper()}';payment=PaymentRecord(customer_id=tenant_id(),subscription_id=sub.id,merchant_payment_id=ref,amount_gross=sub.plan.monthly_price,status='PENDING');db.session.add(payment);db.session.commit();endpoint,fields=build_checkout(sub,payment,current_user,cfg);return render_template('payfast_redirect.html',endpoint=endpoint,fields=fields,payment=payment)
 
 @bp.get('/billing/success')
 @login_required
@@ -733,25 +703,18 @@ def payfast_notify():
             payment.paid_at = utcnow()
             sub = Subscription.query.filter_by(id=payment.subscription_id).first()
             old = sub.state
-            activated_at = utcnow()
-            term_months = payment.term_months or 1
-            paid_until = paid_period_end(activated_at, term_months)
             sub.state = 'ACTIVE'
-            sub.billing_term = payment.billing_term or 'MONTHLY'
-            sub.paid_from = activated_at
-            sub.paid_until = paid_until
-            sub.current_period_start = activated_at
-            sub.current_period_end = paid_until
-            sub.next_payment_at = paid_until if sub.auto_renew else None
+            sub.current_period_start = utcnow()
+            sub.current_period_end = utcnow() + timedelta(days=30)
+            sub.next_payment_at = sub.current_period_end
             sub.grace_ends_at = None
-            sub.cancel_at_period_end = False
             sub.payfast_subscription_token = form.get('token') or sub.payfast_subscription_token
             db.session.add(SubscriptionAuditEvent(
                 customer_id=sub.customer_id,
                 subscription_id=sub.id,
                 previous_state=old,
                 new_state='ACTIVE',
-                reason=f'Validated PayFast COMPLETE ITN; term={sub.billing_term}; paid_until={sub.paid_until.isoformat()}',
+                reason='Validated PayFast COMPLETE ITN',
             ))
         elif form.get('payment_status') in ('FAILED', 'CANCELLED'):
             payment.status = form.get('payment_status')
