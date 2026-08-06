@@ -275,3 +275,14 @@ class CoreAlarmState(db.Model):
 class DataDeletionRequest(db.Model):
     id=db.Column(db.Integer,primary_key=True);customer_id=db.Column(db.Integer,nullable=False,index=True);asset_id=db.Column(db.Integer,nullable=False,index=True);device_id=db.Column(db.Integer,index=True)
     request_type=db.Column(db.String(40),default='TRACKING_DATA',nullable=False);state=db.Column(db.String(30),default='REQUESTED',nullable=False,index=True);requested_at=db.Column(db.DateTime(timezone=True),default=now,nullable=False);reviewed_at=db.Column(db.DateTime(timezone=True));reviewed_by=db.Column(db.Integer);note=db.Column(db.String(500))
+
+
+class FleetFeatureDefaults(db.Model):
+    id=db.Column(db.Integer,primary_key=True);customer_id=db.Column(db.Integer,nullable=False,unique=True,index=True)
+    battery_enabled=db.Column(db.Boolean,default=True,nullable=False);offline_enabled=db.Column(db.Boolean,default=True,nullable=False);gps_enabled=db.Column(db.Boolean,default=True,nullable=False);speed_enabled=db.Column(db.Boolean,default=True,nullable=False);extended_stop_enabled=db.Column(db.Boolean,default=False,nullable=False);unexpected_movement_enabled=db.Column(db.Boolean,default=False,nullable=False)
+    matched_routes_enabled=db.Column(db.Boolean,default=True,nullable=False);possible_addresses_enabled=db.Column(db.Boolean,default=True,nullable=False);email_notifications_enabled=db.Column(db.Boolean,default=False,nullable=False);push_notifications_enabled=db.Column(db.Boolean,default=False,nullable=False)
+    updated_at=db.Column(db.DateTime(timezone=True),default=now,onupdate=now,nullable=False);updated_by=db.Column(db.Integer)
+
+class AssetFeatureOverride(db.Model):
+    id=db.Column(db.Integer,primary_key=True);customer_id=db.Column(db.Integer,nullable=False,index=True);asset_id=db.Column(db.Integer,nullable=False,unique=True,index=True);use_fleet_defaults=db.Column(db.Boolean,default=True,nullable=False)
+    features_json=db.Column(db.JSON,default=dict,nullable=False);updated_at=db.Column(db.DateTime(timezone=True),default=now,onupdate=now,nullable=False);updated_by=db.Column(db.Integer)

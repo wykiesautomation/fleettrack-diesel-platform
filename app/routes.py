@@ -6,9 +6,9 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import desc
 from . import db
 from .payfast import config as payfast_config,build_checkout,event_hash,valid_signature,valid_source,server_validate,forwarded_ip
-from .models import Customer,User,Site,Asset,Device,SignalDefinition,Reading,Alarm,Location,WorkspaceProfile,SubscriptionPlan,Subscription,PaymentRecord,PayFastEvent,SubscriptionAuditEvent,IntegrationConnector,IntegrationSignalMapping,IntegrationEvent,ConnectorEndpointConfig,UniversalSourceMapping,WebhookReceipt,EdgeGateway,IntegrationJobEvent,MqttSubscription,MqttTopicMapping,MqttMessageEvent,MobileTrackerRegistration,MobileConsent,SecurityAuditEvent,AssetAlertSettings,CoreAlarmState,DataDeletionRequest
+from .models import Customer,User,Site,Asset,Device,SignalDefinition,Reading,Alarm,Location,WorkspaceProfile,SubscriptionPlan,Subscription,PaymentRecord,PayFastEvent,SubscriptionAuditEvent,IntegrationConnector,IntegrationSignalMapping,IntegrationEvent,ConnectorEndpointConfig,UniversalSourceMapping,WebhookReceipt,EdgeGateway,IntegrationJobEvent,MqttSubscription,MqttTopicMapping,MqttMessageEvent,MobileTrackerRegistration,MobileConsent,SecurityAuditEvent,AssetAlertSettings,CoreAlarmState,DataDeletionRequest,FleetFeatureDefaults,AssetFeatureOverride
 from .route_intelligence import match_route, reverse_geocode, route_quality
-from .security_privacy import POLICY_VERSION,audit,consent_for_device,settings_for,evaluate_mobile
+from .security_privacy import POLICY_VERSION,audit,consent_for_device,settings_for,evaluate_mobile,FEATURE_KEYS,MANDATORY_CONTROLS,fleet_defaults_for,entitlement_map,effective_features
 bp=Blueprint('main',__name__)
 
 def utcnow(): return datetime.now(timezone.utc)
@@ -482,6 +482,34 @@ def mobile_event():
         db.session.add(DataDeletionRequest(customer_id=device.customer_id,asset_id=device.asset_id,device_id=device.id));audit(device.customer_id,event,device.asset_id,device.id,'DEVICE',None,'Tracking data deletion review requested')
     else:return jsonify(error='unsupported_event'),422
     db.session.commit();return jsonify(status='accepted'),202
+
+@bp.route('/fleet-feature-settings',methods=['GET','POST'])
+@login_required
+def fleet_feature_settings():
+    defaults=fleet_defaults_for(tenant_id());entitlements=entitlement_map(tenant_id())
+    if request.method=='POST':
+        for key in FEATURE_KEYS:
+            if entitlements[key]:setattr(defaults,key+'_enabled',request.form.get(key+'_enabled')=='on')
+        defaults.updated_by=current_user.id
+        if request.form.get('apply_existing')=='yes':
+            for asset in Asset.query.filter_by(customer_id=tenant_id()).all():
+                override=AssetFeatureOverride.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).first()
+                if not override:db.session.add(AssetFeatureOverride(customer_id=tenant_id(),asset_id=asset.id,use_fleet_defaults=True,updated_by=current_user.id))
+                else:override.use_fleet_defaults=True;override.updated_by=current_user.id
+        audit(tenant_id(),'FLEET_FEATURE_DEFAULTS_CHANGED',None,None,'USER',current_user.id,'Fleet feature defaults updated');db.session.commit();flash('Fleet feature defaults saved.','ok');return redirect(url_for('main.fleet_feature_settings'))
+    return render_template('fleet_feature_settings.html',defaults=defaults,defaults_map={key:bool(getattr(defaults,key+'_enabled')) for key in FEATURE_KEYS},entitlements=entitlements,feature_keys=FEATURE_KEYS,mandatory=MANDATORY_CONTROLS)
+
+@bp.route('/asset/<int:asset_id>/feature-settings',methods=['GET','POST'])
+@login_required
+def asset_feature_settings(asset_id):
+    asset=Asset.query.filter_by(id=asset_id,customer_id=tenant_id()).first_or_404();override=AssetFeatureOverride.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).first()
+    if not override:override=AssetFeatureOverride(customer_id=tenant_id(),asset_id=asset.id);db.session.add(override);db.session.flush()
+    entitlements=entitlement_map(tenant_id());effective=effective_features(asset)
+    if request.method=='POST':
+        override.use_fleet_defaults=request.form.get('use_fleet_defaults')=='on';override.updated_by=current_user.id
+        if not override.use_fleet_defaults:override.features_json={key:(request.form.get(key+'_enabled')=='on') for key in FEATURE_KEYS if entitlements[key]}
+        audit(tenant_id(),'ASSET_FEATURE_OVERRIDE_CHANGED',asset.id,None,'USER',current_user.id,'Vehicle feature configuration updated');db.session.commit();flash('Vehicle feature settings saved.','ok');return redirect(url_for('main.asset_feature_settings',asset_id=asset.id))
+    return render_template('asset_feature_settings.html',asset=asset,override=override,effective=effective,entitlements=entitlements,feature_keys=FEATURE_KEYS,mandatory=MANDATORY_CONTROLS)
 
 @bp.route('/asset/<int:asset_id>/alert-settings',methods=['GET','POST'])
 @login_required
