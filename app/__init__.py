@@ -1,9 +1,12 @@
 import os
+import time
+from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
 
 from flask import Flask, jsonify, request, send_from_directory
 from flask_login import LoginManager
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 from werkzeug.security import generate_password_hash
 
@@ -12,11 +15,54 @@ db = SQLAlchemy()
 login_manager = LoginManager()
 login_manager.login_view = "main.login"
 
+@contextmanager
+def schema_startup_lock(app):
+    """Allow only one process to initialise or migrate the schema."""
+    database_url=app.config["SQLALCHEMY_DATABASE_URI"]
+    if database_url.startswith("sqlite"):
+        import fcntl
+        os.makedirs(app.instance_path,exist_ok=True)
+        path=os.path.join(app.instance_path,"assettrack360-schema.lock")
+        with open(path,"w",encoding="utf-8") as handle:
+            fcntl.flock(handle.fileno(),fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(),fcntl.LOCK_UN)
+    else:
+        with db.engine.connect() as connection:
+            connection.execute(text("SELECT pg_advisory_lock(:key)"),{"key":3602026})
+            try:
+                yield
+            finally:
+                connection.execute(text("SELECT pg_advisory_unlock(:key)"),{"key":3602026})
+                connection.commit()
+
+def initialise_schema_safely(app):
+    with schema_startup_lock(app):
+        for attempt in range(3):
+            try:
+                db.create_all()
+                from .payment_entitlement_migration import ensure_payment_entitlement_schema
+                ensure_payment_entitlement_schema(db)
+                return
+            except OperationalError as error:
+                db.session.rollback()
+                if "already exists" in str(error).lower():
+                    return
+                if attempt==2:
+                    raise
+                time.sleep(attempt+1)
+
 
 def create_app(test_config=None):
     app = Flask(__name__)
 
-    db_url = os.getenv("DATABASE_URL", "sqlite:///assettrack360.db")
+    db_url = os.getenv("DATABASE_URL", "").strip()
+    if not db_url:
+        if os.getenv("RENDER", "").lower() == "true":
+            raise RuntimeError("DATABASE_URL is required on Render; refusing production SQLite fallback")
+        db_url = "sqlite:///assettrack360.db"
     if db_url.startswith("postgres://"):
         db_url = db_url.replace("postgres://", "postgresql+psycopg://", 1)
     elif db_url.startswith("postgresql://"):
@@ -84,9 +130,7 @@ def create_app(test_config=None):
 
     with app.app_context():
         from . import edge_models  # Registers REV20A tables before create_all.
-        db.create_all()
-        from .payment_entitlement_migration import ensure_payment_entitlement_schema
-        ensure_payment_entitlement_schema(db)
+        initialise_schema_safely(app)
 
         email = os.getenv("BOOTSTRAP_ADMIN_EMAIL", "").strip().lower()
         password = os.getenv("BOOTSTRAP_ADMIN_PASSWORD", "")
