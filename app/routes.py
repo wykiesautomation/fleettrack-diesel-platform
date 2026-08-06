@@ -19,6 +19,46 @@ def parse_time(v):
 def aware(value):
     if not value:return None
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+def route_distance_km(points):
+    import math
+    total=0.0;previous=None
+    for point in points:
+        if previous is not None:
+            lat1,lon1,lat2,lon2=map(math.radians,(previous.latitude,previous.longitude,point.latitude,point.longitude))
+            value=math.sin((lat2-lat1)/2)**2+math.cos(lat1)*math.cos(lat2)*math.sin((lon2-lon1)/2)**2
+            segment=2*6371.0088*math.asin(math.sqrt(value));elapsed=max(1,(aware(point.sampled_at)-aware(previous.sampled_at)).total_seconds())
+            plausible=max(0.25,elapsed/3600*220+0.1);accuracy=max(float(point.accuracy_m or 0),float(previous.accuracy_m or 0))/1000
+            if segment<=plausible and not(segment<=accuracy and float(point.speed_kmh or 0)<3):total+=segment
+        previous=point
+    return round(total,1)
+def vehicle_day_summary(asset,device,now):
+    start=now.replace(hour=0,minute=0,second=0,microsecond=0)
+    points=Location.query.filter(Location.customer_id==asset.customer_id,Location.asset_id==asset.id,Location.sampled_at>=start).order_by(Location.sampled_at).limit(2000).all()
+    moving=stopped=0.0;stops=[];previous=None;stop_start=None;stop_point=None;maximum=0.0
+    for point in points:
+        speed=max(0.0,float(point.speed_kmh or 0));maximum=max(maximum,speed)
+        if previous:
+            seconds=max(0,(aware(point.sampled_at)-aware(previous.sampled_at)).total_seconds())
+            if seconds<=1800:
+                if speed>=3:moving+=seconds
+                else:stopped+=seconds
+        if speed<3:
+            if stop_start is None:stop_start=aware(point.sampled_at);stop_point=point
+        elif stop_start is not None:
+            duration=(aware(point.sampled_at)-stop_start).total_seconds()
+            if duration>=300:stops.append({'started':stop_start.strftime('%H:%M'),'ended':aware(point.sampled_at).strftime('%H:%M'),'minutes':round(duration/60),'latitude':stop_point.latitude,'longitude':stop_point.longitude})
+            stop_start=None;stop_point=None
+        previous=point
+    if stop_start and points:
+        duration=(aware(points[-1].sampled_at)-stop_start).total_seconds()
+        if duration>=300:stops.append({'started':stop_start.strftime('%H:%M'),'ended':'Now','minutes':round(duration/60),'latitude':stop_point.latitude,'longitude':stop_point.longitude})
+    timeline=[]
+    if points:
+        timeline.append({'time':aware(points[0].sampled_at).strftime('%H:%M'),'title':'First position received','detail':'Tracking started for today'})
+        for stop in stops[-4:]:timeline.append({'time':stop['started'],'title':'Vehicle stopped','detail':f"{stop['minutes']} min stop"})
+        timeline.append({'time':aware(points[-1].sampled_at).strftime('%H:%M'),'title':'Latest position received','detail':f"{float(points[-1].speed_kmh or 0):.0f} km/h"});timeline.sort(key=lambda x:x['time'])
+    online=bool(device and device.active and device.last_seen and now-aware(device.last_seen)<=timedelta(minutes=5));speed=float(points[-1].speed_kmh or 0) if points else 0.0
+    return {'online':online,'motion':'MOVING' if speed>=3 else 'PARKED','tracking':'ACTIVE' if online else 'INACTIVE','distance_km':route_distance_km(points),'moving_minutes':round(moving/60),'stopped_minutes':round(stopped/60),'stop_count':len(stops),'max_speed_kmh':round(maximum),'stops':stops[-6:][::-1],'timeline':timeline[-8:][::-1]}
 def mobile_code_hash(value):
     return hashlib.sha256(str(value).strip().upper().encode('utf-8')).hexdigest()
 def mobile_tracker_device():
@@ -273,7 +313,8 @@ def asset_view(asset_id):
     vib=None
     if asset.asset_type=='VIBRATION':
         value=ctx['vibration'].value if ctx['vibration'] else None;vib={'rms':value,'temperature':ctx['temperature'].value if ctx['temperature'] else None,'condition':'CRITICAL' if value is not None and value>=7.1 else 'WARNING' if value is not None and value>=4.5 else 'HEALTHY' if value is not None else 'WAITING'}
-    return render_template('asset.html',asset=asset,signal_cards=cards,signal_lookup=lookup,chart_series=series,alarms=alarms,open_alarms=open_alarms,device=device,location=location,route_points=route,last_contact=last,generated_at=now,context=ctx,tank_stats=tank,tracking_stats=track,vibration_stats=vib,phone_battery=phone_battery)
+    vehicle_summary=vehicle_day_summary(asset,device,now) if asset.asset_type=='TRACKER' else None
+    return render_template('asset.html',asset=asset,signal_cards=cards,signal_lookup=lookup,chart_series=series,alarms=alarms,open_alarms=open_alarms,device=device,location=location,route_points=route,last_contact=last,generated_at=now,context=ctx,tank_stats=tank,tracking_stats=track,vibration_stats=vib,phone_battery=phone_battery,vehicle_summary=vehicle_summary)
 
 @bp.route('/asset/<int:asset_id>/signals',methods=['GET','POST'])
 @login_required
