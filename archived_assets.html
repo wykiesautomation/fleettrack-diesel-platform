@@ -1,1 +1,0 @@
-{% extends 'base.html' %}{% block body %}<h1>Archived Assets</h1>{% for asset in items %}<section class='panel'><h2>{{asset.name}}</h2><form method='post' action='/assets/{{asset.id}}/restore'><button>Restore</button></form></section>{% else %}<p>No archived assets.</p>{% endfor %}{% endblock %}
