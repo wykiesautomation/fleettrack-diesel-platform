@@ -132,7 +132,7 @@
       heading: coords.heading,
       battery_percent: batteryLevel,
       charging,
-      client_version: 'mobile-web-1.2'
+      client_version: 'mobile-web-1.3'
     };
 
     try {
