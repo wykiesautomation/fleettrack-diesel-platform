@@ -9,15 +9,15 @@
 <div class="page">
   <div class="head">
     <div><span class="eyebrow">DEVICE FLEET</span><h1>Device Registry</h1></div>
-    <div class="head-actions"><a class="button" href="/mobile-tracker">Open Phone Tracker</a><a class="button" href="/onboarding">+ Add Asset</a></div>
+    <div class="head-actions"><a class="button" href="/devices/connect">+ Connect Device</a><a class="button" href="/onboarding">+ Add Asset</a></div>
   </div>
   {% if new_token %}<div class="token"><b>One-time API token for device {{new_token_device}}</b><p>Copy now. This value is hidden after leaving this page.</p><input readonly value="{{new_token}}"></div>{% endif %}
   <div class="device-grid">
   {% for item in items %}
     <article class="card">
       <div class="top"><div><h3>{{item.device.device_uid}}</h3><p>{{item.asset.name}} · {{item.device.device_type}}</p></div><span class="state {{'' if item.online else 'off'}}">{{'ONLINE' if item.online else 'OFFLINE'}}</span></div>
-      <div class="facts"><div class="fact"><small>FIRMWARE</small><b>{{item.device.firmware or 'Not reported'}}</b></div><div class="fact"><small>LAST CONTACT</small><b>{{item.last_contact}}</b></div><div class="fact"><small>STATE</small><b>{{'Enabled' if item.device.active else 'Disabled'}}</b></div><div class="fact"><small>ASSET TYPE</small><b>{{item.asset.asset_type}}</b></div><div class="fact"><small>CONSENT</small><b>{{'Active' if item.consent and item.consent.active else 'Not active'}}</b></div><div class="fact"><small>PHONE BATTERY</small><b>{{'%.0f%%'|format(item.battery.value) if item.battery else 'Not reported'}}</b></div></div>
-      <div class="actions"><a href="/asset/{{item.asset.id}}">Open Asset</a><form method="post" action="/devices/{{item.device.id}}/rotate-token"><button onclick="return confirm('Rotate token and invalidate the old one?')">Rotate Token</button></form><form method="post" action="/devices/{{item.device.id}}/toggle"><button>{{'Disable' if item.device.active else 'Enable'}}</button></form></div>
+      <div class="facts"><div class="fact"><small>FIRMWARE</small><b>{{item.device.firmware or 'Not reported'}}</b></div><div class="fact"><small>LAST CONTACT</small><b>{{item.last_contact}}</b></div><div class="fact"><small>STATE</small><b>{{'Enabled' if item.device.active else 'Disabled'}}</b></div><div class="fact"><small>ASSET TYPE</small><b>{{item.asset.asset_type}}</b></div></div>
+      <div class="actions"><a href="/asset/{{item.asset.id}}">Open Asset</a><form method="post" action="/devices/{{item.device.id}}/replace-phone"><button onclick="return confirm('Replace this phone? The old token will be revoked and asset history retained.')">Replace Phone</button></form><form method="post" action="/devices/{{item.device.id}}/toggle"><button>{{'Disable' if item.device.active else 'Enable'}}</button></form></div>
       {% if not item.device.active %}
       <div class="delete-panel">
         <b>Permanently Delete Device</b>
