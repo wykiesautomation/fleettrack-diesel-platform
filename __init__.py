@@ -85,6 +85,8 @@ def create_app(test_config=None):
     with app.app_context():
         from . import edge_models  # Registers REV20A tables before create_all.
         db.create_all()
+        from .device_identity_migration import ensure_device_identity_schema
+        ensure_device_identity_schema(db)
 
         email = os.getenv("BOOTSTRAP_ADMIN_EMAIL", "").strip().lower()
         password = os.getenv("BOOTSTRAP_ADMIN_PASSWORD", "")
