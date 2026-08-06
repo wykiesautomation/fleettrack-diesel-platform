@@ -287,25 +287,31 @@ def asset_view(asset_id):
     alarms=Alarm.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).order_by(desc(Alarm.opened_at)).limit(30).all();open_alarms=[a for a in alarms if a.state in ('OPEN','ACKNOWLEDGED')]
     device=Device.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,active=True).first();location=Location.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).order_by(desc(Location.sampled_at)).first();route=Location.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).order_by(desc(Location.sampled_at)).limit(200).all()[::-1]
     phone_battery=None
-    if device and device.device_type=='MOBILE_WEB_TRACKER':
-        battery_signal=SignalDefinition.query.filter_by(asset_id=asset.id,key='battery_percent',enabled=True).first()
-        if battery_signal:
-            battery_rows=Reading.query.filter_by(signal_id=battery_signal.id).order_by(desc(Reading.sampled_at)).limit(48).all()[::-1]
-            values=[max(0.0,min(100.0,float(row.value))) for row in battery_rows]
-            if values:
-                charging_state='Not reported'
+    battery_signal=SignalDefinition.query.filter_by(asset_id=asset.id,key='battery_percent',enabled=True).first()
+    if battery_signal:
+        battery_rows=Reading.query.filter_by(signal_id=battery_signal.id).order_by(desc(Reading.sampled_at)).limit(48).all()[::-1]
+        values=[max(0.0,min(100.0,float(row.value))) for row in battery_rows]
+        if values:
+            latest_battery_at=aware(battery_rows[-1].sampled_at)
+            age_seconds=max(0,int((now-latest_battery_at).total_seconds()))
+            active_mobile=bool(device and device.device_type in ('MOBILE_WEB_TRACKER','ANDROID_MOBILE_TRACKER','MOBILE_TRACKER') and device.active)
+            fresh=bool(active_mobile and device.last_seen and now-aware(device.last_seen)<=timedelta(minutes=5) and age_seconds<=600)
+            charging_state='Not reported'
+            if active_mobile:
                 for capability in (device.capabilities or []):
                     if str(capability).startswith('CHARGING:'):
                         charging_state='Yes' if str(capability).split(':',1)[1].lower()=='true' else 'No'
-                phone_battery={
-                    'current':round(values[-1]),'minimum':round(min(values)),'maximum':round(max(values)),
-                    'change':round(values[-1]-values[0]),'charging':charging_state,
-                    'samples':[{'time':aware(row.sampled_at).strftime('%d %b %H:%M'),'value':round(max(0.0,min(100.0,float(row.value))))} for row in battery_rows],
-                }
+            age_label='Just now' if age_seconds<60 else f'{age_seconds//60} min ago' if age_seconds<3600 else f'{age_seconds//3600} h ago' if age_seconds<86400 else f'{age_seconds//86400} d ago'
+            phone_battery={
+                'current':round(values[-1]),'minimum':round(min(values)),'maximum':round(max(values)),
+                'change':round(values[-1]-values[0]),'charging':charging_state,
+                'samples':[{'time':aware(row.sampled_at).strftime('%d %b %H:%M'),'value':round(max(0.0,min(100.0,float(row.value))))} for row in battery_rows],
+                'is_live':fresh,'status':'LIVE' if fresh else 'HISTORICAL','recorded_at':latest_battery_at.strftime('%Y-%m-%d %H:%M UTC'),'age':age_label,
+            }
 
-    last='No telemetry received'
-    if asset.last_seen:
-        sec=max(0,int((now-aware(asset.last_seen)).total_seconds()));last='Just now' if sec<60 else f'{sec//60} min ago' if sec<3600 else f'{sec//3600} h ago' if sec<86400 else f'{sec//86400} d ago'
+    last='No active device' if not device else 'No telemetry received'
+    if device and device.last_seen:
+        sec=max(0,int((now-aware(device.last_seen)).total_seconds()));last='Just now' if sec<60 else f'{sec//60} min ago' if sec<3600 else f'{sec//3600} h ago' if sec<86400 else f'{sec//86400} d ago'
     ctx={'level':lookup.get('level_percent'),'volume':lookup.get('volume_l'),'battery':lookup.get('battery_v'),'solar':lookup.get('solar_v'),'speed':lookup.get('speed_kmh'),'vibration':lookup.get('vibration_rms'),'temperature':lookup.get('temperature_c')}
     tank=None
     if asset.asset_type=='TANK':
