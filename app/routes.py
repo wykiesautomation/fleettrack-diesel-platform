@@ -356,6 +356,26 @@ def devices():
     )
 
 
+@bp.post('/devices/<int:device_id>/delete')
+@login_required
+def delete_device(device_id):
+    record=Device.query.filter_by(id=device_id,customer_id=tenant_id()).first_or_404()
+    if record.active:
+        flash('Disable the device before permanently deleting it.','error')
+        return redirect(url_for('main.devices'))
+    expected_uid=str(record.device_uid or '').strip()
+    confirm_uid=request.form.get('confirm_uid','').strip()
+    confirm_word=request.form.get('confirm_word','').strip().upper()
+    if confirm_uid!=expected_uid or confirm_word!='DELETE':
+        flash('Permanent delete confirmation did not match the Device UID and DELETE.','error')
+        return redirect(url_for('main.devices'))
+    # Preserve the asset, tracking history, readings and alarms. Remove only the device identity/token.
+    record.api_token=secrets.token_urlsafe(32)
+    db.session.delete(record)
+    db.session.commit()
+    flash(f'Device {expected_uid} permanently deleted. Asset and history were retained.','ok')
+    return redirect(url_for('main.devices'))
+
 @bp.post('/devices/<int:device_id>/rotate-token')
 @login_required
 def rotate_device_token(device_id):
