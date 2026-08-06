@@ -13,7 +13,7 @@
   <section id="registerCard" class="card">
     <h1>Register this phone</h1>
     <p class="consent">Tracking is visible and user-controlled. Enter a valid one-time code and explicitly start location sharing.</p>
-    <label>One-time registration code<input id="code" autocomplete="one-time-code" placeholder="AB12-CD34" maxlength="9"></label>
+    <div class="consent"><b>Privacy notice</b><p>AssetTrack 360 collects location, speed, GPS accuracy, battery, charging status, device identity and upload times for visible asset tracking. AssetTrack 360 does not collect microphone audio, camera media, contacts, messages, call history or personal files.</p><label><input id="consentCheck" type="checkbox" style="width:auto"> I consent to visible location tracking under Privacy Notice 2026.1.</label></div><label>One-time registration code<input id="code" autocomplete="one-time-code" placeholder="AB12-CD34" maxlength="9"></label>
     <button id="registerBtn" type="button" class="primary">Register Phone</button>
   </section>
   <section id="trackerCard" class="card hidden">
@@ -21,11 +21,11 @@
     <div class="grid"><div class="fact"><small>DEVICE</small><b id="deviceUid">-</b></div><div class="fact"><small>GPS ACCURACY</small><b id="accuracy">-</b></div><div class="fact"><small>LAST POSITION</small><b id="coords">-</b></div><div class="fact"><small>QUEUED POINTS</small><b id="queueCount">0</b></div><div class="fact"><small>LAST UPLOAD</small><b id="lastUpload">Never</b></div><div class="fact"><small>NETWORK</small><b id="network">-</b></div></div>
     <button id="startBtn" type="button" class="primary" onclick="startTracking()">Start Tracking</button>
     <button id="stopBtn" type="button" class="danger hidden" onclick="stopTracking()">Stop Tracking</button>
-    <button type="button" onclick="flushQueue()">Send Queued Points</button>
+    <button type="button" onclick="flushQueue()">Send Queued Points</button><button type="button" onclick="withdrawConsent()">Withdraw Consent</button><button type="button" onclick="requestDataDeletion()">Request Tracking Data Deletion</button><button type="button" class="danger" onclick="unregisterPhone()">Unregister This Phone</button><button type="button" onclick="clearLocalTrackerData()">Clear Local Tracker Data</button>
     <p class="consent">Keep this page open during the web trial. Android may pause browser GPS when the screen is locked or Battery Saver is active.</p>
   </section>
   <section class="card"><div class="status"><b>Activity Log</b><button type="button" style="width:auto;margin:0;padding:7px 10px" onclick="clearLog()">Clear</button></div><div id="log" class="log">Loading tracker controls...</div></section>
 </main>
-<script src="/static/mobile_tracker.js?v=12" defer></script>
+<script src="/static/mobile_tracker.js?v=20" defer></script>
 </body>
 </html>
