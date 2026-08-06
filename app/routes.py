@@ -1,4 +1,4 @@
-import os, secrets, re, hashlib
+import os, secrets, re
 from datetime import datetime, timezone, timedelta
 from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify, abort, session, current_app, send_from_directory
 from flask_login import login_user, logout_user, login_required, current_user
@@ -6,7 +6,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import desc
 from . import db
 from .payfast import config as payfast_config,build_checkout,event_hash,valid_signature,valid_source,server_validate,forwarded_ip
-from .models import Customer,User,Site,Asset,Device,SignalDefinition,Reading,Alarm,Location,WorkspaceProfile,SubscriptionPlan,Subscription,PaymentRecord,PayFastEvent,SubscriptionAuditEvent,IntegrationConnector,IntegrationSignalMapping,IntegrationEvent,ConnectorEndpointConfig,UniversalSourceMapping,WebhookReceipt,EdgeGateway,IntegrationJobEvent,MqttSubscription,MqttTopicMapping,MqttMessageEvent,MobileTrackerRegistration
+from .models import Customer,User,Site,Asset,Device,SignalDefinition,Reading,Alarm,Location,WorkspaceProfile,SubscriptionPlan,Subscription,PaymentRecord,PayFastEvent,SubscriptionAuditEvent,IntegrationConnector,IntegrationSignalMapping,IntegrationEvent,ConnectorEndpointConfig,UniversalSourceMapping,WebhookReceipt,EdgeGateway,IntegrationJobEvent,MqttSubscription,MqttTopicMapping,MqttMessageEvent
 bp=Blueprint('main',__name__)
 
 def utcnow(): return datetime.now(timezone.utc)
@@ -19,10 +19,6 @@ def parse_time(v):
 def aware(value):
     if not value:return None
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
-def mobile_code_hash(v):return hashlib.sha256(str(v).strip().upper().encode()).hexdigest()
-def mobile_device():
- token=request.headers.get('Authorization','').removeprefix('Bearer ').strip()
- return Device.query.filter_by(api_token=token,active=True,device_type='MOBILE_WEB_TRACKER').first() if token else None
 def latest_reading(signal_id):
     return Reading.query.filter_by(signal_id=signal_id).order_by(desc(Reading.sampled_at)).first()
 def asset_status(asset):
@@ -47,22 +43,46 @@ def evaluate_alarm(sig,value):
 
 ALLOWED_BILLING_ENDPOINTS={'main.public_home','main.login','main.logout','main.register','main.health','main.billing','main.plans','main.select_plan','main.billing_checkout','main.billing_success','main.billing_cancel','main.payfast_notify','static'}
 
+BILLING_TERMS={
+    'MONTHLY':{'months':1,'price_multiplier':1.0,'discount_percent':0},
+    'ANNUAL':{'months':12,'price_multiplier':10.8,'discount_percent':10},
+    'THREE_YEAR':{'months':36,'price_multiplier':28.8,'discount_percent':20},
+}
+
+def billing_term_spec(value):
+    return BILLING_TERMS.get(str(value or '').upper(),BILLING_TERMS['MONTHLY'])
+
+def paid_period_end(start,months):
+    # Commercial terms use calendar-safe fixed periods: 30, 365, or 1095 days.
+    return start+timedelta(days={1:30,12:365,36:1095}.get(months,30))
+
+def subscription_is_entitled(sub):
+    now=utcnow()
+    if sub.state=='TRIAL':return bool(sub.trial_ends_at and now<=aware(sub.trial_ends_at))
+    if sub.state=='ACTIVE':return bool(sub.paid_until and now<=aware(sub.paid_until))
+    if sub.state=='GRACE_PERIOD':return bool(sub.grace_ends_at and now<=aware(sub.grace_ends_at))
+    return False
+
 def set_subscription_state(sub,new_state,reason):
     if sub.state!=new_state:
         db.session.add(SubscriptionAuditEvent(customer_id=sub.customer_id,subscription_id=sub.id,previous_state=sub.state,new_state=new_state,reason=reason));sub.state=new_state;db.session.commit()
 
 def refresh_subscription(sub):
     now=utcnow()
-    if sub.state=='TRIAL' and sub.trial_ends_at and now>aware(sub.trial_ends_at):set_subscription_state(sub,'SUSPENDED','Trial expired without successful payment')
-    elif sub.state=='ACTIVE' and sub.current_period_end and now>aware(sub.current_period_end):
-        sub.grace_ends_at=now+timedelta(days=3);set_subscription_state(sub,'GRACE_PERIOD','Paid period ended; three-day grace period started')
-    elif sub.state=='GRACE_PERIOD' and sub.grace_ends_at and now>aware(sub.grace_ends_at):set_subscription_state(sub,'SUSPENDED','Grace period expired')
+    if sub.state=='TRIAL' and sub.trial_ends_at and now>aware(sub.trial_ends_at):
+        set_subscription_state(sub,'SUSPENDED','Trial expired without successful payment')
+    elif sub.state=='ACTIVE' and sub.paid_until and now>aware(sub.paid_until):
+        sub.current_period_end=sub.paid_until
+        sub.grace_ends_at=aware(sub.paid_until)+timedelta(days=3)
+        set_subscription_state(sub,'GRACE_PERIOD','Paid entitlement ended; three-day grace period started')
+    elif sub.state=='GRACE_PERIOD' and sub.grace_ends_at and now>aware(sub.grace_ends_at):
+        set_subscription_state(sub,'SUSPENDED','Grace period expired')
     return sub
 
 def entitlement_for(customer_id):
     sub=Subscription.query.filter_by(customer_id=customer_id).first()
     if not sub:return False,None
-    refresh_subscription(sub);return sub.state in ('TRIAL','ACTIVE','GRACE_PERIOD'),sub
+    refresh_subscription(sub);return subscription_is_entitled(sub),sub
 
 @bp.before_app_request
 def enforce_subscription_access():
@@ -246,7 +266,7 @@ def asset_view(asset_id):
     last='No telemetry received'
     if asset.last_seen:
         sec=max(0,int((now-aware(asset.last_seen)).total_seconds()));last='Just now' if sec<60 else f'{sec//60} min ago' if sec<3600 else f'{sec//3600} h ago' if sec<86400 else f'{sec//86400} d ago'
-    ctx={'level':lookup.get('level_percent'),'volume':lookup.get('volume_l'),'battery':lookup.get('battery_v'),'phone_battery':lookup.get('battery_percent'),'solar':lookup.get('solar_v'),'speed':lookup.get('speed_kmh'),'vibration':lookup.get('vibration_rms'),'temperature':lookup.get('temperature_c')}
+    ctx={'level':lookup.get('level_percent'),'volume':lookup.get('volume_l'),'battery':lookup.get('battery_v'),'solar':lookup.get('solar_v'),'speed':lookup.get('speed_kmh'),'vibration':lookup.get('vibration_rms'),'temperature':lookup.get('temperature_c')}
     tank=None
     if asset.asset_type=='TANK':
         lvl=ctx['level'].value if ctx['level'] else None;vol=ctx['volume'].value if ctx['volume'] else None;cap=float(asset.capacity or 0);state='CRITICAL' if lvl is not None and lvl<=10 else 'WARNING' if lvl is not None and lvl<=20 else 'HEALTHY' if lvl is not None else 'WAITING';tank={'level':lvl,'volume':vol,'capacity':cap,'available':max(0,cap-float(vol or 0)) if cap else None,'unit':asset.capacity_unit or 'L','state':state}
@@ -320,39 +340,6 @@ def account():
         subscription=subscription,
     )
 
-
-@bp.post('/asset/<int:asset_id>/mobile-tracker/create')
-@login_required
-def create_mobile_tracker(asset_id):
- asset=Asset.query.filter_by(id=asset_id,customer_id=tenant_id()).first_or_404();MobileTrackerRegistration.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,used_at=None).delete(synchronize_session=False);code=f'{secrets.token_hex(2).upper()}-{secrets.token_hex(2).upper()}';db.session.add(MobileTrackerRegistration(customer_id=tenant_id(),asset_id=asset.id,code_hash=mobile_code_hash(code),device_uid=f'AT360-PHONE-{asset.id:06d}',expires_at=utcnow()+timedelta(minutes=30),created_by=current_user.id));db.session.commit();session['mobile_registration_code']=code;session['mobile_registration_asset']=asset.name;return redirect(url_for('main.mobile_tracker_setup'))
-@bp.get('/mobile-tracker/setup')
-@login_required
-def mobile_tracker_setup():return render_template('mobile_tracker_setup.html',code=session.pop('mobile_registration_code',None),asset_name=session.pop('mobile_registration_asset',None))
-@bp.post('/api/v1/mobile/register')
-def mobile_register():
- data=request.get_json(silent=True) or {};reg=MobileTrackerRegistration.query.filter_by(code_hash=mobile_code_hash(data.get('code','')),used_at=None).first()
- if not reg:return jsonify(error='invalid_registration_code'),404
- token=secrets.token_urlsafe(36);d=Device(customer_id=reg.customer_id,asset_id=reg.asset_id,device_uid=reg.device_uid,device_type='MOBILE_WEB_TRACKER',api_token=token,active=True,firmware='mobile-web-1.1',capabilities=['GPS','PHONE_BATTERY']);reg.used_at=utcnow();db.session.add(d)
- if not SignalDefinition.query.filter_by(asset_id=reg.asset_id,key='battery_percent').first():db.session.add(SignalDefinition(customer_id=reg.customer_id,asset_id=reg.asset_id,key='battery_percent',label='Phone Battery',signal_type='PERCENT',source_type='MOBILE',unit='%',widget='battery'))
- db.session.commit();return jsonify(status='registered',device_uid=d.device_uid,device_token=token,asset_name=d.asset.name),201
-@bp.post('/api/v1/mobile/location')
-def mobile_location():
- d=mobile_device()
- if not d:return jsonify(error='invalid_mobile_tracker_token'),401
- x=request.get_json(silent=True) or {};seq=str(x.get('sequence',''))
- if Location.query.filter_by(asset_id=d.asset_id,sequence=seq).first():return jsonify(status='duplicate'),200
- try:lat=float(x['latitude']);lon=float(x['longitude']);acc=max(0,float(x.get('accuracy_m') or 0));speed=max(0,float(x.get('speed_kmh') or 0))
- except:return jsonify(error='invalid_location_payload'),400
- # Stationary drift filter: speed under 3 km/h is normalized to zero.
- if speed<3:speed=0.0
- sampled=parse_time(x.get('timestamp'));db.session.add(Location(customer_id=d.customer_id,asset_id=d.asset_id,sampled_at=sampled,latitude=lat,longitude=lon,speed_kmh=speed,accuracy_m=acc,heading=x.get('heading'),sequence=seq))
- bp=x.get('battery_percent')
- if bp is not None:
-  sig=SignalDefinition.query.filter_by(asset_id=d.asset_id,key='battery_percent').first()
-  if not sig:sig=SignalDefinition(customer_id=d.customer_id,asset_id=d.asset_id,key='battery_percent',label='Phone Battery',signal_type='PERCENT',source_type='MOBILE',unit='%',widget='battery');db.session.add(sig);db.session.flush()
-  bseq=f'{seq}:battery';
-  if not Reading.query.filter_by(signal_id=sig.id,sequence=bseq).first():db.session.add(Reading(customer_id=d.customer_id,asset_id=d.asset_id,signal_id=sig.id,sampled_at=sampled,value=max(0,min(100,float(bp))),unit='%',quality='GOOD',sequence=bseq))
- d.last_seen=utcnow();d.asset.last_seen=sampled;d.capabilities=['GPS','PHONE_BATTERY',f'CHARGING:{bool(x.get("charging"))}'];db.session.commit();return jsonify(status='accepted',sequence=seq),202
 
 @bp.get('/devices')
 @login_required
@@ -651,7 +638,7 @@ def select_plan(plan_id):
 @login_required
 def billing():
     sub=Subscription.query.filter_by(customer_id=tenant_id()).first_or_404();refresh_subscription(sub);payments=PaymentRecord.query.filter_by(customer_id=tenant_id()).order_by(desc(PaymentRecord.created_at)).limit(30).all();days=max(0,(aware(sub.trial_ends_at)-utcnow()).days) if sub.trial_ends_at and sub.state=='TRIAL' else None
-    return render_template('billing.html',subscription=sub,payments=payments,active_devices=Device.query.filter_by(customer_id=tenant_id(),active=True).count(),days_left=days,payfast_mode=payfast_config()['mode'])
+    return render_template('billing.html',subscription=sub,payments=payments,active_devices=Device.query.filter_by(customer_id=tenant_id(),active=True).count(),days_left=days,payfast_mode=payfast_config()['mode'],billing_terms=BILLING_TERMS)
 
 @bp.post('/billing/checkout')
 @login_required
@@ -659,7 +646,13 @@ def billing_checkout():
     cfg=payfast_config();sub=Subscription.query.filter_by(customer_id=tenant_id()).first_or_404()
     if not cfg['merchant_id'] or not cfg['merchant_key']:flash('PayFast is not configured.','error');return redirect(url_for('main.billing'))
     if sub.plan.monthly_price<=0:flash('Industrial plan requires a quote.','error');return redirect(url_for('main.billing'))
-    ref=f'AT360-{tenant_id()}-{sub.id}-{secrets.token_hex(6).upper()}';payment=PaymentRecord(customer_id=tenant_id(),subscription_id=sub.id,merchant_payment_id=ref,amount_gross=sub.plan.monthly_price,status='PENDING');db.session.add(payment);db.session.commit();endpoint,fields=build_checkout(sub,payment,current_user,cfg);return render_template('payfast_redirect.html',endpoint=endpoint,fields=fields,payment=payment)
+    term=str(request.form.get('billing_term') or sub.billing_term or 'MONTHLY').upper()
+    if term not in BILLING_TERMS:term='MONTHLY'
+    spec=BILLING_TERMS[term];amount=round(float(sub.plan.monthly_price)*spec['price_multiplier'],2)
+    sub.billing_term=term;sub.auto_renew='auto_renew' in request.form if term=='MONTHLY' else False
+    ref=f'AT360-{tenant_id()}-{sub.id}-{secrets.token_hex(6).upper()}'
+    payment=PaymentRecord(customer_id=tenant_id(),subscription_id=sub.id,merchant_payment_id=ref,amount_gross=amount,status='PENDING',billing_term=term,term_months=spec['months'],raw_summary={'billing_term':term,'term_months':spec['months'],'discount_percent':spec['discount_percent']})
+    db.session.add(payment);db.session.commit();endpoint,fields=build_checkout(sub,payment,current_user,cfg);return render_template('payfast_redirect.html',endpoint=endpoint,fields=fields,payment=payment)
 
 @bp.get('/billing/success')
 @login_required
@@ -740,18 +733,25 @@ def payfast_notify():
             payment.paid_at = utcnow()
             sub = Subscription.query.filter_by(id=payment.subscription_id).first()
             old = sub.state
+            activated_at = utcnow()
+            term_months = payment.term_months or 1
+            paid_until = paid_period_end(activated_at, term_months)
             sub.state = 'ACTIVE'
-            sub.current_period_start = utcnow()
-            sub.current_period_end = utcnow() + timedelta(days=30)
-            sub.next_payment_at = sub.current_period_end
+            sub.billing_term = payment.billing_term or 'MONTHLY'
+            sub.paid_from = activated_at
+            sub.paid_until = paid_until
+            sub.current_period_start = activated_at
+            sub.current_period_end = paid_until
+            sub.next_payment_at = paid_until if sub.auto_renew else None
             sub.grace_ends_at = None
+            sub.cancel_at_period_end = False
             sub.payfast_subscription_token = form.get('token') or sub.payfast_subscription_token
             db.session.add(SubscriptionAuditEvent(
                 customer_id=sub.customer_id,
                 subscription_id=sub.id,
                 previous_state=old,
                 new_state='ACTIVE',
-                reason='Validated PayFast COMPLETE ITN',
+                reason=f'Validated PayFast COMPLETE ITN; term={sub.billing_term}; paid_until={sub.paid_until.isoformat()}',
             ))
         elif form.get('payment_status') in ('FAILED', 'CANCELLED'):
             payment.status = form.get('payment_status')
