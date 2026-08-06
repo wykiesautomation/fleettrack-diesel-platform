@@ -69,7 +69,9 @@ def mobile_tracker_device():
 def latest_reading(signal_id):
     return Reading.query.filter_by(signal_id=signal_id).order_by(desc(Reading.sampled_at)).first()
 def asset_status(asset):
-    if not asset.last_seen or utcnow()-asset.last_seen.replace(tzinfo=asset.last_seen.tzinfo or timezone.utc)>timedelta(minutes=30): return 'OFFLINE'
+    device=Device.query.filter_by(customer_id=asset.customer_id,asset_id=asset.id,active=True).first()
+    if not device:return 'UNASSIGNED'
+    if not device.last_seen or utcnow()-aware(device.last_seen)>timedelta(minutes=30):return 'OFFLINE'
     open_alarm=Alarm.query.filter_by(customer_id=asset.customer_id,asset_id=asset.id,state='OPEN').order_by(desc(Alarm.severity)).first()
     return open_alarm.severity if open_alarm else 'HEALTHY'
 def scale_signal(sig,raw):
@@ -244,11 +246,11 @@ def dashboard():
     assets=Asset.query.filter_by(customer_id=tenant_id()).order_by(Asset.name).all()
     sites=Site.query.filter_by(customer_id=tenant_id()).order_by(Site.name).all()
     devices=Device.query.filter_by(customer_id=tenant_id(),active=True).all()
-    now=utcnow(); counts={'HEALTHY':0,'WARNING':0,'CRITICAL':0,'OFFLINE':0}; cards=[]; attention=[]; mapped=[]
+    now=utcnow(); counts={'HEALTHY':0,'WARNING':0,'CRITICAL':0,'OFFLINE':0,'UNASSIGNED':0}; cards=[]; attention=[]; mapped=[]
     tank_capacity=tank_volume=0.0; tank_count=low_count=0
     for asset in assets:
-        status=asset_status(asset);asset.status=status;counts[status]=counts.get(status,0)+1
         device=Device.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,active=True).first()
+        status=asset_status(asset);asset.status=status;counts[status]=counts.get(status,0)+1
         sigs={x.key:latest_reading(x.id) for x in SignalDefinition.query.filter_by(asset_id=asset.id,enabled=True)}
         l1,v1,l2,v2='STATUS',status,'LAST CONTACT','No data'
         if asset.asset_type=='TANK':
@@ -260,13 +262,13 @@ def dashboard():
             l1='VIBRATION';v1=f'{vib.value:.2f} mm/s' if vib else 'Waiting';l2='TEMPERATURE';v2=f'{temp.value:.1f} °C' if temp else 'Waiting'
         else:
             first=next((r for r in sigs.values() if r),None);l1='LATEST VALUE';v1=f'{first.value:.2f} {first.unit or ""}' if first else 'Waiting';l2='INPUTS';v2=str(len(sigs))
-        seen='No telemetry'
-        if asset.last_seen:
-            mins=max(0,int((now-aware(asset.last_seen)).total_seconds()//60));seen='Just now' if mins<1 else f'{mins} min ago' if mins<60 else f'{mins//60} h ago'
+        seen='No active device' if not device else 'No telemetry'
+        if device and device.last_seen:
+            mins=max(0,int((now-aware(device.last_seen)).total_seconds()//60));seen='Just now' if mins<1 else f'{mins} min ago' if mins<60 else f'{mins//60} h ago'
         cards.append({'asset':asset,'status':status,'metric_1_label':l1,'metric_1_value':v1,'metric_2_label':l2,'metric_2_value':v2,'device_type':device.device_type if device else 'No device assigned','last_seen':seen})
         if status in ('CRITICAL','WARNING','OFFLINE'):attention.append({'asset':asset,'status':status,'message':'Communication timeout' if status=='OFFLINE' else 'Active condition requires review'})
         loc=Location.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).order_by(desc(Location.sampled_at)).first()
-        if loc:mapped.append({'id':asset.id,'name':asset.name,'type':asset.asset_type,'status':status,'lat':loc.latitude,'lon':loc.longitude})
+        if device and device.last_seen and now-aware(device.last_seen)<=timedelta(minutes=30) and loc:mapped.append({'id':asset.id,'name':asset.name,'type':asset.asset_type,'status':status,'lat':loc.latitude,'lon':loc.longitude})
     order={'CRITICAL':0,'WARNING':1,'OFFLINE':2};attention.sort(key=lambda x:order.get(x['status'],9))
     recent=[]
     for alarm in Alarm.query.filter_by(customer_id=tenant_id()).order_by(desc(Alarm.opened_at)).limit(8):
@@ -275,6 +277,33 @@ def dashboard():
     connectivity={'online':online,'offline':max(0,len(devices)-online),'online_percent':online/len(devices)*100 if devices else 0,'firmware_reported':sum(1 for d in devices if d.firmware),'unassigned':sum(1 for a in assets if not any(d.asset_id==a.id for d in devices))}
     tank={'count':tank_count,'capacity':tank_capacity,'volume':tank_volume,'percent':tank_volume/tank_capacity*100 if tank_capacity else 0,'low_count':low_count}
     return render_template('dashboard.html',assets=assets,sites=sites,site_count=len(sites),device_count=len(devices),counts=counts,asset_cards=cards,attention_items=attention,mapped_assets=mapped,tank_summary=tank,connectivity=connectivity,recent_events=recent,generated_at=now)
+
+@bp.get('/admin/test-data-cleanup')
+@login_required
+def test_data_cleanup():
+    assets=Asset.query.filter_by(customer_id=tenant_id()).order_by(Asset.name).all();items=[]
+    for asset in assets:
+        active_device=Device.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,active=True).first()
+        items.append({'asset':asset,'active_device':active_device,'locations':Location.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).count(),'readings':Reading.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).count(),'alarms':Alarm.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).count()})
+    return render_template('test_data_cleanup.html',items=items)
+
+@bp.post('/admin/test-data-cleanup/<int:asset_id>')
+@login_required
+def clean_test_asset(asset_id):
+    asset=Asset.query.filter_by(id=asset_id,customer_id=tenant_id()).first_or_404()
+    if Device.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,active=True).first():flash('Cleanup blocked: active device assigned.','error');return redirect(url_for('main.test_data_cleanup'))
+    if request.form.get('confirm_name','').strip()!=asset.name or request.form.get('confirm_word','').strip().upper()!='DELETE':flash('Type the exact asset name and DELETE.','error');return redirect(url_for('main.test_data_cleanup'))
+    action=request.form.get('action','')
+    if action=='clear_history':
+        signal_ids=[x.id for x in SignalDefinition.query.filter_by(asset_id=asset.id).all()]
+        if signal_ids:Reading.query.filter(Reading.customer_id==tenant_id(),Reading.asset_id==asset.id).delete(synchronize_session=False)
+        Location.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False);Alarm.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False);asset.last_seen=None;asset.status='UNASSIGNED';audit(tenant_id(),'TEST_HISTORY_CLEARED',asset.id,None,'USER',current_user.id,'Asset test telemetry cleared');db.session.commit();flash(f'History cleared for {asset.name}.','ok')
+    elif action=='delete_empty_asset':
+        has_history=Location.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).first() or Reading.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).first() or Alarm.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).first()
+        if has_history:flash('Asset contains history. Clear history first, then delete.','error')
+        else:
+            AssetFeatureOverride.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False);AssetAlertSettings.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False);SignalDefinition.query.filter_by(asset_id=asset.id).delete(synchronize_session=False);name=asset.name;db.session.delete(asset);db.session.commit();flash(f'Empty test asset {name} deleted.','ok')
+    return redirect(url_for('main.test_data_cleanup'))
 
 @bp.get('/asset/<int:asset_id>')
 @login_required
