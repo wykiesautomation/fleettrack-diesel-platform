@@ -69,9 +69,7 @@ def mobile_tracker_device():
 def latest_reading(signal_id):
     return Reading.query.filter_by(signal_id=signal_id).order_by(desc(Reading.sampled_at)).first()
 def asset_status(asset):
-    device=Device.query.filter_by(customer_id=asset.customer_id,asset_id=asset.id,active=True).first()
-    if not device:return 'UNASSIGNED'
-    if not device.last_seen or utcnow()-aware(device.last_seen)>timedelta(minutes=30):return 'OFFLINE'
+    if not asset.last_seen or utcnow()-asset.last_seen.replace(tzinfo=asset.last_seen.tzinfo or timezone.utc)>timedelta(minutes=30): return 'OFFLINE'
     open_alarm=Alarm.query.filter_by(customer_id=asset.customer_id,asset_id=asset.id,state='OPEN').order_by(desc(Alarm.severity)).first()
     return open_alarm.severity if open_alarm else 'HEALTHY'
 def scale_signal(sig,raw):
@@ -246,11 +244,11 @@ def dashboard():
     assets=Asset.query.filter_by(customer_id=tenant_id()).order_by(Asset.name).all()
     sites=Site.query.filter_by(customer_id=tenant_id()).order_by(Site.name).all()
     devices=Device.query.filter_by(customer_id=tenant_id(),active=True).all()
-    now=utcnow(); counts={'HEALTHY':0,'WARNING':0,'CRITICAL':0,'OFFLINE':0,'UNASSIGNED':0}; cards=[]; attention=[]; mapped=[]
+    now=utcnow(); counts={'HEALTHY':0,'WARNING':0,'CRITICAL':0,'OFFLINE':0}; cards=[]; attention=[]; mapped=[]
     tank_capacity=tank_volume=0.0; tank_count=low_count=0
     for asset in assets:
-        device=Device.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,active=True).first()
         status=asset_status(asset);asset.status=status;counts[status]=counts.get(status,0)+1
+        device=Device.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,active=True).first()
         sigs={x.key:latest_reading(x.id) for x in SignalDefinition.query.filter_by(asset_id=asset.id,enabled=True)}
         l1,v1,l2,v2='STATUS',status,'LAST CONTACT','No data'
         if asset.asset_type=='TANK':
@@ -262,13 +260,13 @@ def dashboard():
             l1='VIBRATION';v1=f'{vib.value:.2f} mm/s' if vib else 'Waiting';l2='TEMPERATURE';v2=f'{temp.value:.1f} °C' if temp else 'Waiting'
         else:
             first=next((r for r in sigs.values() if r),None);l1='LATEST VALUE';v1=f'{first.value:.2f} {first.unit or ""}' if first else 'Waiting';l2='INPUTS';v2=str(len(sigs))
-        seen='No active device' if not device else 'No telemetry'
-        if device and device.last_seen:
-            mins=max(0,int((now-aware(device.last_seen)).total_seconds()//60));seen='Just now' if mins<1 else f'{mins} min ago' if mins<60 else f'{mins//60} h ago'
+        seen='No telemetry'
+        if asset.last_seen:
+            mins=max(0,int((now-aware(asset.last_seen)).total_seconds()//60));seen='Just now' if mins<1 else f'{mins} min ago' if mins<60 else f'{mins//60} h ago'
         cards.append({'asset':asset,'status':status,'metric_1_label':l1,'metric_1_value':v1,'metric_2_label':l2,'metric_2_value':v2,'device_type':device.device_type if device else 'No device assigned','last_seen':seen})
         if status in ('CRITICAL','WARNING','OFFLINE'):attention.append({'asset':asset,'status':status,'message':'Communication timeout' if status=='OFFLINE' else 'Active condition requires review'})
         loc=Location.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).order_by(desc(Location.sampled_at)).first()
-        if device and device.last_seen and now-aware(device.last_seen)<=timedelta(minutes=30) and loc:mapped.append({'id':asset.id,'name':asset.name,'type':asset.asset_type,'status':status,'lat':loc.latitude,'lon':loc.longitude})
+        if loc:mapped.append({'id':asset.id,'name':asset.name,'type':asset.asset_type,'status':status,'lat':loc.latitude,'lon':loc.longitude})
     order={'CRITICAL':0,'WARNING':1,'OFFLINE':2};attention.sort(key=lambda x:order.get(x['status'],9))
     recent=[]
     for alarm in Alarm.query.filter_by(customer_id=tenant_id()).order_by(desc(Alarm.opened_at)).limit(8):
@@ -277,33 +275,6 @@ def dashboard():
     connectivity={'online':online,'offline':max(0,len(devices)-online),'online_percent':online/len(devices)*100 if devices else 0,'firmware_reported':sum(1 for d in devices if d.firmware),'unassigned':sum(1 for a in assets if not any(d.asset_id==a.id for d in devices))}
     tank={'count':tank_count,'capacity':tank_capacity,'volume':tank_volume,'percent':tank_volume/tank_capacity*100 if tank_capacity else 0,'low_count':low_count}
     return render_template('dashboard.html',assets=assets,sites=sites,site_count=len(sites),device_count=len(devices),counts=counts,asset_cards=cards,attention_items=attention,mapped_assets=mapped,tank_summary=tank,connectivity=connectivity,recent_events=recent,generated_at=now)
-
-@bp.get('/admin/test-data-cleanup')
-@login_required
-def test_data_cleanup():
-    assets=Asset.query.filter_by(customer_id=tenant_id()).order_by(Asset.name).all();items=[]
-    for asset in assets:
-        active_device=Device.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,active=True).first()
-        items.append({'asset':asset,'active_device':active_device,'locations':Location.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).count(),'readings':Reading.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).count(),'alarms':Alarm.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).count()})
-    return render_template('test_data_cleanup.html',items=items)
-
-@bp.post('/admin/test-data-cleanup/<int:asset_id>')
-@login_required
-def clean_test_asset(asset_id):
-    asset=Asset.query.filter_by(id=asset_id,customer_id=tenant_id()).first_or_404()
-    if Device.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,active=True).first():flash('Cleanup blocked: active device assigned.','error');return redirect(url_for('main.test_data_cleanup'))
-    if request.form.get('confirm_name','').strip()!=asset.name or request.form.get('confirm_word','').strip().upper()!='DELETE':flash('Type the exact asset name and DELETE.','error');return redirect(url_for('main.test_data_cleanup'))
-    action=request.form.get('action','')
-    if action=='clear_history':
-        signal_ids=[x.id for x in SignalDefinition.query.filter_by(asset_id=asset.id).all()]
-        if signal_ids:Reading.query.filter(Reading.customer_id==tenant_id(),Reading.asset_id==asset.id).delete(synchronize_session=False)
-        Location.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False);Alarm.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False);asset.last_seen=None;asset.status='UNASSIGNED';audit(tenant_id(),'TEST_HISTORY_CLEARED',asset.id,None,'USER',current_user.id,'Asset test telemetry cleared');db.session.commit();flash(f'History cleared for {asset.name}.','ok')
-    elif action=='delete_empty_asset':
-        has_history=Location.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).first() or Reading.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).first() or Alarm.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).first()
-        if has_history:flash('Asset contains history. Clear history first, then delete.','error')
-        else:
-            AssetFeatureOverride.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False);AssetAlertSettings.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False);SignalDefinition.query.filter_by(asset_id=asset.id).delete(synchronize_session=False);name=asset.name;db.session.delete(asset);db.session.commit();flash(f'Empty test asset {name} deleted.','ok')
-    return redirect(url_for('main.test_data_cleanup'))
 
 @bp.get('/asset/<int:asset_id>')
 @login_required
@@ -418,6 +389,68 @@ def account():
     )
 
 
+@bp.route('/devices/connect',methods=['GET','POST'])
+@login_required
+def connect_device():
+    assets=Asset.query.filter_by(customer_id=tenant_id()).order_by(Asset.name).all()
+    sites=Site.query.filter_by(customer_id=tenant_id()).order_by(Site.name).all()
+    if request.method=='POST':
+        device_kind=request.form.get('device_kind','ANDROID_PHONE').strip().upper()
+        if device_kind!='ANDROID_PHONE':
+            flash('This connector is prepared but not yet enabled. Use Android Phone for the current pilot.','error')
+            return redirect(url_for('main.connect_device'))
+        asset_mode=request.form.get('asset_mode','existing')
+        if asset_mode=='new':
+            name=request.form.get('asset_name','').strip();site_id=request.form.get('site_id',type=int)
+            site=Site.query.filter_by(id=site_id,customer_id=tenant_id()).first()
+            if len(name)<2 or not site:flash('Choose a site and enter an asset name.','error');return redirect(url_for('main.connect_device'))
+            asset=Asset(customer_id=tenant_id(),site_id=site.id,name=name,asset_type='TRACKER',status='UNASSIGNED',metadata_json={'onboarding_source':'DEVICE_CENTRE'});db.session.add(asset);db.session.flush()
+        else:
+            asset=Asset.query.filter_by(id=request.form.get('asset_id',type=int),customer_id=tenant_id()).first()
+            if not asset:flash('Choose an existing asset.','error');return redirect(url_for('main.connect_device'))
+        active=Device.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,active=True).first()
+        if active:flash('This asset already has an active device. Use Replace Phone from Device Registry.','error');return redirect(url_for('main.connect_device'))
+        MobileTrackerRegistration.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,used_at=None).delete(synchronize_session=False)
+        code=f'{secrets.token_hex(2).upper()}-{secrets.token_hex(2).upper()}'
+        reg=MobileTrackerRegistration(customer_id=tenant_id(),asset_id=asset.id,code_hash=mobile_code_hash(code),device_uid=f'AT360-PHONE-{asset.id:06d}',expires_at=utcnow()+timedelta(minutes=30),created_by=current_user.id)
+        db.session.add(reg);db.session.commit()
+        session['onboarding_registration_id']=reg.id;session['onboarding_registration_code']=code
+        audit(tenant_id(),'DEVICE_ONBOARDING_STARTED',asset.id,None,'USER',current_user.id,'Android phone onboarding started');db.session.commit()
+        return redirect(url_for('main.connect_device_waiting'))
+    return render_template('connect_device.html',assets=assets,sites=sites)
+
+@bp.get('/devices/connect/waiting')
+@login_required
+def connect_device_waiting():
+    reg_id=session.get('onboarding_registration_id');code=session.get('onboarding_registration_code')
+    reg=MobileTrackerRegistration.query.filter_by(id=reg_id,customer_id=tenant_id()).first() if reg_id else None
+    if not reg or not code:return redirect(url_for('main.connect_device'))
+    return render_template('connect_device_waiting.html',registration=reg,code=code,asset=reg.asset)
+
+@bp.get('/api/v1/device-onboarding/status/<int:registration_id>')
+@login_required
+def device_onboarding_status(registration_id):
+    reg=MobileTrackerRegistration.query.filter_by(id=registration_id,customer_id=tenant_id()).first_or_404()
+    device=Device.query.filter_by(customer_id=tenant_id(),asset_id=reg.asset_id,device_uid=reg.device_uid).order_by(desc(Device.id)).first()
+    if not reg.used_at or not device:return jsonify(state='WAITING',expires_at=aware(reg.expires_at).isoformat())
+    consent=MobileConsent.query.filter_by(customer_id=tenant_id(),device_uid=device.device_uid).order_by(desc(MobileConsent.id)).first()
+    battery_sig=SignalDefinition.query.filter_by(asset_id=device.asset_id,key='battery_percent').first();battery=latest_reading(battery_sig.id) if battery_sig else None
+    return jsonify(state='CONNECTED',device_uid=device.device_uid,asset_name=reg.asset.name,app_version=device.firmware or 'Awaiting first telemetry',consent='Active' if consent and consent.active else 'Pending',battery=round(battery.value) if battery else None,last_contact=device.last_seen.isoformat() if device.last_seen else None,open_asset=url_for('main.asset_view',asset_id=reg.asset_id),open_devices=url_for('main.devices'))
+
+@bp.post('/devices/<int:device_id>/replace-phone')
+@login_required
+def replace_phone(device_id):
+    record=Device.query.filter_by(id=device_id,customer_id=tenant_id()).first_or_404();asset=record.asset
+    record.active=False;record.api_token=secrets.token_urlsafe(36)
+    consent=MobileConsent.query.filter_by(customer_id=tenant_id(),device_uid=record.device_uid,active=True).order_by(desc(MobileConsent.id)).first()
+    if consent:consent.active=False;consent.withdrawn_at=utcnow()
+    MobileTrackerRegistration.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,used_at=None).delete(synchronize_session=False)
+    code=f'{secrets.token_hex(2).upper()}-{secrets.token_hex(2).upper()}'
+    reg=MobileTrackerRegistration(customer_id=tenant_id(),asset_id=asset.id,code_hash=mobile_code_hash(code),device_uid=f'AT360-PHONE-{asset.id:06d}',expires_at=utcnow()+timedelta(minutes=30),created_by=current_user.id)
+    db.session.add(reg);db.session.commit();session['onboarding_registration_id']=reg.id;session['onboarding_registration_code']=code
+    audit(tenant_id(),'PHONE_REPLACEMENT_STARTED',asset.id,record.id,'USER',current_user.id,'Old token revoked; replacement registration created');db.session.commit()
+    return redirect(url_for('main.connect_device_waiting'))
+
 @bp.post('/asset/<int:asset_id>/mobile-tracker/create')
 @login_required
 def create_mobile_tracker(asset_id):
@@ -447,6 +480,8 @@ def mobile_tracker_register():
     if utcnow()>aware(reg.expires_at):return jsonify(error='registration_code_expired'),410
     if Device.query.filter_by(customer_id=reg.customer_id,asset_id=reg.asset_id,device_type='MOBILE_WEB_TRACKER',active=True).first():return jsonify(error='mobile_tracker_already_registered'),409
     token=secrets.token_urlsafe(36)
+    old_identity=Device.query.filter_by(customer_id=reg.customer_id,device_uid=reg.device_uid,active=False).first()
+    if old_identity:db.session.delete(old_identity);db.session.flush()
     device=Device(customer_id=reg.customer_id,asset_id=reg.asset_id,device_uid=reg.device_uid,device_type='MOBILE_WEB_TRACKER',api_token=token,active=True,firmware='mobile-web-1.2',capabilities=['GPS','PHONE_BATTERY','USER_CONSENT_REQUIRED'])
     reg.used_at=utcnow();db.session.add(device);db.session.flush()
     consent=MobileConsent(customer_id=reg.customer_id,asset_id=reg.asset_id,device_id=device.id,device_uid=device.device_uid,policy_version=POLICY_VERSION,active=True,user_agent_summary=(request.headers.get('User-Agent') or '')[:240]);db.session.add(consent);audit(reg.customer_id,'CONSENT_ACCEPTED',reg.asset_id,device.id,'DEVICE',None,'Explicit location consent accepted');audit(reg.customer_id,'PHONE_REGISTERED',reg.asset_id,device.id,'DEVICE',None,'Mobile tracker registered')
