@@ -2,40 +2,69 @@
 {% block title %}Test Data Cleanup | AssetOps 360{% endblock %}
 {% block head_extra %}
 <style>
-.head{display:flex;justify-content:space-between;align-items:end;gap:20px}.grid{display:grid;gap:13px;margin-top:20px}.item{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:17px;display:grid;grid-template-columns:1fr 2fr;gap:18px}.meta{color:var(--muted);font-size:11px}.cleanup-form{border-top:1px solid #4d3440;padding-top:12px}.cleanup-form label{display:block;margin:8px 0 4px}.cleanup-form input,.cleanup-form select{display:block;width:100%;background:#071724;color:white;border:1px solid #31566c;border-radius:8px;padding:11px;margin-bottom:8px}.cleanup-form button{display:inline-block;background:#d83e59;color:white;border:0;border-radius:8px;padding:11px 16px;font-weight:900;cursor:pointer}.cleanup-form button:hover{filter:brightness(1.1)}.cleanup-form button:disabled{cursor:not-allowed;opacity:.6}.blocked{color:var(--orange);font-weight:900}@media(max-width:800px){.item{grid-template-columns:1fr}.head{display:block}.head .button{margin-top:12px}}
+.head{display:flex;justify-content:space-between;align-items:end;gap:20px}.grid{display:grid;gap:13px;margin-top:20px}.item{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:17px;display:grid;grid-template-columns:1fr 2fr;gap:18px}.meta{color:var(--muted);font-size:11px}.cleanup-form{border-top:1px solid #4d3440;padding-top:12px}.cleanup-form label{display:block;margin:8px 0 4px}.cleanup-form input,.cleanup-form select{display:block;width:100%;background:#071724;color:white;border:1px solid #31566c;border-radius:8px;padding:11px;margin-bottom:8px}.delete-ready{display:none;background:#d83e59;color:white;border:0;border-radius:8px;padding:11px 16px;font-weight:900;cursor:pointer}.delete-ready.show{display:inline-block}.delete-ready:disabled{opacity:.65;cursor:wait}.hint{font-size:11px;color:var(--muted);margin:8px 0}.hint.ready{color:var(--lime);font-weight:900}.result{display:none;margin-top:9px;padding:9px;border-radius:8px;background:#071724}.result.show{display:block}.result.error{color:#ff8aa0;border:1px solid #774052}.result.ok{color:var(--lime);border:1px solid #47702d}.blocked{color:var(--orange);font-weight:900}.protected{background:#d83e59;color:white;border:0;border-radius:8px;padding:11px 16px;font-weight:900;opacity:.65}@media(max-width:800px){.item{grid-template-columns:1fr}.head{display:block}.head .button{margin-top:12px}}
 </style>
 {% endblock %}
 {% block body %}
-<div class="head">
-  <div><span class="eyebrow">ADMIN SAFETY TOOL</span><h1>Test Data Cleanup</h1><p>Delete unused test assets and retained telemetry. Active devices are protected.</p></div>
-  <a class="button" href="{{ url_for('main.dashboard') }}">Back to Dashboard</a>
-</div>
+<div class="head"><div><span class="eyebrow">ADMIN SAFETY TOOL</span><h1>Test Data Cleanup</h1><p>The delete button appears only after both confirmations match exactly.</p></div><a class="button" href="{{url_for('main.dashboard')}}">Back to Dashboard</a></div>
 <div class="grid">
 {% for x in items %}
-<article class="item">
-  <div>
-    <h2>{{ x.asset.name }}</h2>
-    <div class="meta">Asset ID {{ x.asset.id }} · {{ x.asset.asset_type }} · {{ x.asset.site.name }}</div>
-    <p class="meta">{{ x.devices }} device records · {{ x.locations }} locations · {{ x.readings }} readings · {{ x.alarms }} alarms</p>
-    {% if x.active_device %}<p class="blocked">BLOCKED: Active device {{ x.active_device.device_uid }} assigned</p>{% endif %}
-  </div>
-  <form class="cleanup-form" method="POST" action="{{ url_for('main.clean_test_asset', asset_id=x.asset.id) }}">
-    <label for="action-{{ x.asset.id }}">Action</label>
-    <select id="action-{{ x.asset.id }}" name="action">
-      <option value="delete_all">Delete asset and all retained test history</option>
-      <option value="clear_history">Clear history but keep asset</option>
-    </select>
-    <label for="name-{{ x.asset.id }}">Exact asset name</label>
-    <input id="name-{{ x.asset.id }}" name="confirm_name" type="text" autocomplete="off" placeholder="Type exactly: {{ x.asset.name }}" required>
-    <label for="word-{{ x.asset.id }}">Confirmation word</label>
-    <input id="word-{{ x.asset.id }}" name="confirm_word" type="text" autocomplete="off" placeholder="Type DELETE" required>
-    {% if x.active_device %}
-      <button type="button" disabled>Protected</button>
-    {% else %}
-      <button type="submit">Delete Selected Test Asset</button>
-    {% endif %}
+<article class="item" id="asset-card-{{x.asset.id}}">
+  <div><h2>{{x.asset.name}}</h2><div class="meta">Asset ID {{x.asset.id}} · {{x.asset.asset_type}} · {{x.asset.site.name}}</div><p class="meta">{{x.devices}} device records · {{x.locations}} locations · {{x.readings}} readings · {{x.alarms}} alarms</p>{% if x.active_device %}<p class="blocked">BLOCKED: Active device {{x.active_device.device_uid}} assigned</p>{% endif %}</div>
+  <form class="cleanup-form" method="post" action="{{url_for('main.clean_test_asset',asset_id=x.asset.id)}}" data-asset-name="{{x.asset.name|e}}" data-asset-id="{{x.asset.id}}">
+    <label>Action</label><select name="action"><option value="delete_all">Delete asset and all retained test history</option><option value="clear_history">Clear history but keep asset</option></select>
+    <label>Exact asset name</label><input class="confirm-name" name="confirm_name" type="text" autocomplete="off" placeholder="Type exactly: {{x.asset.name}}">
+    <label>Confirmation word</label><input class="confirm-word" name="confirm_word" type="text" autocomplete="off" placeholder="Type DELETE">
+    {% if x.active_device %}<button class="protected" type="button" disabled>Protected</button>{% else %}<p class="hint">Enter the exact asset name and DELETE to unlock deletion.</p><button class="delete-ready" type="submit">Delete Asset Permanently</button>{% endif %}
+    <div class="result" role="status"></div>
   </form>
 </article>
 {% else %}<p>No assets found.</p>{% endfor %}
 </div>
+{% endblock %}
+{% block scripts %}
+<script>
+(() => {
+  document.querySelectorAll('.cleanup-form').forEach(form => {
+    const expected = form.dataset.assetName;
+    const nameInput = form.querySelector('.confirm-name');
+    const wordInput = form.querySelector('.confirm-word');
+    const button = form.querySelector('.delete-ready');
+    const hint = form.querySelector('.hint');
+    const result = form.querySelector('.result');
+    if (!button) return;
+    const validate = () => {
+      const ready = nameInput.value === expected && wordInput.value.trim().toUpperCase() === 'DELETE';
+      button.classList.toggle('show', ready);
+      hint.classList.toggle('ready', ready);
+      hint.textContent = ready ? 'Confirmation matched. Delete button unlocked.' : 'Enter the exact asset name and DELETE to unlock deletion.';
+    };
+    nameInput.addEventListener('input', validate);
+    wordInput.addEventListener('input', validate);
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      validate();
+      if (!button.classList.contains('show')) return;
+      if (!window.confirm(`Permanently delete ${expected} and all retained test history?`)) return;
+      button.disabled = true;
+      button.textContent = 'Deleting...';
+      result.className = 'result show';
+      result.textContent = 'Sending delete request...';
+      try {
+        const response = await fetch(form.action, {method:'POST', body:new FormData(form), credentials:'same-origin', redirect:'follow'});
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        result.className = 'result show ok';
+        result.textContent = 'Asset deleted. Refreshing list...';
+        window.location.href = '{{url_for("main.test_data_cleanup")}}?deleted=' + encodeURIComponent(expected) + '&t=' + Date.now();
+      } catch (error) {
+        result.className = 'result show error';
+        result.textContent = 'Delete failed: ' + error.message + '. Check Render logs.';
+        button.disabled = false;
+        button.textContent = 'Delete Asset Permanently';
+      }
+    });
+    validate();
+  });
+})();
+</script>
 {% endblock %}
