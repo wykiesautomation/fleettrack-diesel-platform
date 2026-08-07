@@ -547,33 +547,18 @@ def connect_device_waiting():
     reg_id=session.get('onboarding_registration_id');code=session.get('onboarding_registration_code')
     reg=MobileTrackerRegistration.query.filter_by(id=reg_id,customer_id=tenant_id()).first() if reg_id else None
     if not reg or not code:return redirect(url_for('main.connect_device'))
-    return render_template('connect_device_waiting.html',registration=reg,code=code,asset=reg.asset)
-
-@bp.get('/devices/connect/qr/<int:registration_id>.png')
-@login_required
-def device_onboarding_qr(registration_id):
-    reg=MobileTrackerRegistration.query.filter_by(id=registration_id,customer_id=tenant_id()).first_or_404()
-    code=session.get('onboarding_registration_code')
-    if session.get('onboarding_registration_id')!=reg.id or not code:
-        abort(404)
-    if reg.used_at or utcnow()>aware(reg.expires_at):
-        abort(410)
-    import qrcode
+    if reg.used_at:return redirect(url_for('main.devices'))
+    remaining_seconds=max(0,int((aware(reg.expires_at)-utcnow()).total_seconds()))
     payload=json.dumps({
         'type':'assetops360_registration',
         'version':1,
         'api':request.url_root.rstrip('/'),
         'code':str(code).strip().upper(),
     },separators=(',',':'))
-    image=qrcode.make(payload)
-    output=io.BytesIO()
-    image.save(output,format='PNG')
-    output.seek(0)
-    response=send_file(output,mimetype='image/png',max_age=0,download_name=f'assetops360-registration-{reg.id}.png')
-    response.headers['Cache-Control']='no-store, no-cache, must-revalidate, max-age=0'
-    response.headers['Pragma']='no-cache'
-    response.headers['X-Content-Type-Options']='nosniff'
-    return response
+    from .vendor import segno
+    qr=segno.make(payload,error='m')
+    qr_data_uri=qr.svg_data_uri(scale=6,border=3,dark='#061622',light='#ffffff')
+    return render_template('connect_device_waiting.html',registration=reg,code=code,asset=reg.asset,qr_data_uri=qr_data_uri,remaining_seconds=remaining_seconds)
 
 @bp.get('/api/v1/device-onboarding/status/<int:registration_id>')
 @login_required
