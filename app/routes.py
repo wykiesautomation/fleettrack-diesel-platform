@@ -9,6 +9,7 @@ from .payfast import config as payfast_config,build_checkout,event_hash,valid_si
 from .models import Customer,User,Site,Asset,Device,SignalDefinition,Reading,Alarm,Location,WorkspaceProfile,SubscriptionPlan,Subscription,PaymentRecord,PayFastEvent,SubscriptionAuditEvent,IntegrationConnector,IntegrationSignalMapping,IntegrationEvent,ConnectorEndpointConfig,UniversalSourceMapping,WebhookReceipt,EdgeGateway,IntegrationJobEvent,MqttSubscription,MqttTopicMapping,MqttMessageEvent,MobileTrackerRegistration,MobileConsent,SecurityAuditEvent,AssetAlertSettings,CoreAlarmState,DataDeletionRequest,FleetFeatureDefaults,AssetFeatureOverride
 from .route_intelligence import match_route, reverse_geocode, route_quality
 from .security_privacy import POLICY_VERSION,audit,consent_for_device,settings_for,evaluate_mobile,FEATURE_KEYS,MANDATORY_CONTROLS,fleet_defaults_for,entitlement_map,effective_features
+from .seo import SEO_PAGES, render_seo_page
 bp=Blueprint('main',__name__)
 
 def utcnow(): return datetime.now(timezone.utc)
@@ -68,10 +69,18 @@ def mobile_tracker_device():
     return Device.query.filter_by(api_token=token,active=True,device_type='MOBILE_WEB_TRACKER').first() if token else None
 def latest_reading(signal_id):
     return Reading.query.filter_by(signal_id=signal_id).order_by(desc(Reading.sampled_at)).first()
+def active_device_for(asset):
+    return Device.query.filter_by(customer_id=asset.customer_id,asset_id=asset.id,active=True).first()
+
 def asset_status(asset):
-    if not asset.last_seen or utcnow()-asset.last_seen.replace(tzinfo=asset.last_seen.tzinfo or timezone.utc)>timedelta(minutes=30): return 'OFFLINE'
+    device=active_device_for(asset)
+    if not device:
+        return 'UNASSIGNED'
+    if not device.last_seen or utcnow()-aware(device.last_seen)>timedelta(minutes=30):
+        return 'OFFLINE'
     open_alarm=Alarm.query.filter_by(customer_id=asset.customer_id,asset_id=asset.id,state='OPEN').order_by(desc(Alarm.severity)).first()
     return open_alarm.severity if open_alarm else 'HEALTHY'
+
 def scale_signal(sig,raw):
     if sig.source_type!='4-20mA': return raw
     span=sig.raw_max-sig.raw_min
@@ -88,7 +97,7 @@ def evaluate_alarm(sig,value):
     elif severity and existing: existing.severity=severity;existing.message=msg;existing.value=value
     elif existing: existing.state='CLOSED';existing.note=(existing.note or '')+' Auto-closed after return to normal.'
 
-ALLOWED_BILLING_ENDPOINTS={'main.public_home','main.login','main.logout','main.register','main.health','main.billing','main.plans','main.select_plan','main.billing_checkout','main.billing_success','main.billing_cancel','main.payfast_notify','main.subscription_required','static'}
+ALLOWED_BILLING_ENDPOINTS={'main.public_home','main.seo_public_page','main.login','main.logout','main.register','main.health','main.billing','main.plans','main.select_plan','main.billing_checkout','main.billing_success','main.billing_cancel','main.payfast_notify','main.subscription_required','static'}
 
 def set_subscription_state(sub,new_state,reason):
     if sub.state!=new_state:
@@ -102,18 +111,8 @@ def refresh_subscription(sub):
     elif sub.state=='GRACE_PERIOD' and sub.grace_ends_at and now>aware(sub.grace_ends_at):set_subscription_state(sub,'SUSPENDED','Grace period expired')
     return sub
 
-def pilot_access_for(customer_id):
-    """Environment-controlled access for controlled pilot testing."""
-    enabled=os.getenv('ASSETOPS_PILOT_MODE','false').strip().lower() in ('1','true','yes','on')
-    if not enabled:return False
-    raw=os.getenv('ASSETOPS_PILOT_CUSTOMER_IDS','').strip()
-    if not raw:return True
-    allowed={value.strip() for value in raw.split(',') if value.strip()}
-    return str(customer_id) in allowed
-
 def entitlement_for(customer_id):
     sub=Subscription.query.filter_by(customer_id=customer_id).first()
-    if pilot_access_for(customer_id):return True,sub
     if not sub:return False,None
     refresh_subscription(sub);return sub.state in ('TRIAL','ACTIVE','GRACE_PERIOD'),sub
 
@@ -124,9 +123,21 @@ def enforce_subscription_access():
     allowed,sub=entitlement_for(current_user.customer_id)
     if not allowed:return redirect(url_for('main.subscription_required'))
 
+@bp.get('/fleet-tracking-south-africa')
+@bp.get('/mobile-phone-tracking')
+@bp.get('/vehicle-gps-tracking')
+@bp.get('/asset-monitoring')
+@bp.get('/industrial-sensor-monitoring')
+@bp.get('/fleet-tracking-api')
+@bp.get('/security-privacy')
+def seo_public_page():
+    slug=request.path.strip('/')
+    rendered=render_seo_page(slug)
+    return rendered if rendered is not None else abort(404)
+
 @bp.get("/health")
 def health():
-    return {"status":"ok","service":"assettrack360-rev17","pilot_mode":os.getenv("ASSETOPS_PILOT_MODE","false").strip().lower() in ("1","true","yes","on")}
+    return {"status": "ok", "service": "assettrack360-rev17"}
 
 @bp.get("/mobile-tracker")
 def mobile_tracker_page():
@@ -144,50 +155,27 @@ def google_site_verification():
 
 @bp.get("/robots.txt")
 def robots_txt():
-    body = (
+    body=(
         "User-agent: *\n"
         "Allow: /\n"
-        "Disallow: /dashboard\n"
-        "Disallow: /asset/\n"
-        "Disallow: /devices\n"
-        "Disallow: /account\n"
-        "Disallow: /billing\n"
-        "Disallow: /integrations\n"
-        "Disallow: /edge-gateways\n"
-        "Disallow: /api/\n"
-        "Disallow: /onboarding\n\n"
+        "Disallow: /dashboard\nDisallow: /asset/\nDisallow: /devices\n"
+        "Disallow: /account\nDisallow: /billing\nDisallow: /integrations\n"
+        "Disallow: /edge-gateways\nDisallow: /api/\nDisallow: /onboarding\n"
+        "Disallow: /admin/\nDisallow: /mobile-tracker\n\n"
         "Sitemap: https://fleettrack.wykiesautomation.co.za/sitemap.xml\n"
     )
-    return body, 200, {"Content-Type": "text/plain; charset=utf-8"}
-
-
+    return body,200,{"Content-Type":"text/plain; charset=utf-8"}
 @bp.get("/sitemap.xml")
 def sitemap_xml():
-    base_url = "https://fleettrack.wykiesautomation.co.za"
-    last_modified = datetime.now(timezone.utc).date().isoformat()
-    pages = (
-        ("/", "daily", "1.0"),
-        ("/register", "weekly", "0.9"),
-        ("/login", "monthly", "0.5"),
-        ("/plans", "weekly", "0.8"),
-    )
-    entries = []
-    for path, change_frequency, priority in pages:
-        entries.append(
-            "  <url>\n"
-            f"    <loc>{base_url}{path}</loc>\n"
-            f"    <lastmod>{last_modified}</lastmod>\n"
-            f"    <changefreq>{change_frequency}</changefreq>\n"
-            f"    <priority>{priority}</priority>\n"
-            "  </url>"
-        )
-    xml = '<?xml version="1.0" encoding="UTF-8"?>\n'
-    xml += '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
-    xml += "\n".join(entries)
-    xml += "\n</urlset>\n"
-    return xml, 200, {"Content-Type": "application/xml; charset=utf-8"}
-
-
+    base_url="https://fleettrack.wykiesautomation.co.za"
+    last_modified=utcnow().date().isoformat()
+    pages=[("/","daily","1.0"),("/register","weekly","0.8"),("/plans","weekly","0.8")]
+    pages.extend((page["path"],"weekly","0.9") for page in SEO_PAGES.values())
+    entries=[]
+    for path,change_frequency,priority in pages:
+        entries.append("  <url>\n"+f"    <loc>{base_url}{path}</loc>\n"+f"    <lastmod>{last_modified}</lastmod>\n"+f"    <changefreq>{change_frequency}</changefreq>\n"+f"    <priority>{priority}</priority>\n"+"  </url>")
+    xml='<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'+"\n".join(entries)+"\n</urlset>\n"
+    return xml,200,{"Content-Type":"application/xml; charset=utf-8"}
 @bp.get("/site.webmanifest")
 def site_webmanifest():
     return jsonify(
@@ -254,11 +242,11 @@ def dashboard():
     assets=Asset.query.filter_by(customer_id=tenant_id()).order_by(Asset.name).all()
     sites=Site.query.filter_by(customer_id=tenant_id()).order_by(Site.name).all()
     devices=Device.query.filter_by(customer_id=tenant_id(),active=True).all()
-    now=utcnow(); counts={'HEALTHY':0,'WARNING':0,'CRITICAL':0,'OFFLINE':0}; cards=[]; attention=[]; mapped=[]
+    now=utcnow(); counts={'HEALTHY':0,'WARNING':0,'CRITICAL':0,'OFFLINE':0,'UNASSIGNED':0}; cards=[]; attention=[]; mapped=[]
     tank_capacity=tank_volume=0.0; tank_count=low_count=0
     for asset in assets:
         status=asset_status(asset);asset.status=status;counts[status]=counts.get(status,0)+1
-        device=Device.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,active=True).first()
+        device=active_device_for(asset)
         sigs={x.key:latest_reading(x.id) for x in SignalDefinition.query.filter_by(asset_id=asset.id,enabled=True)}
         l1,v1,l2,v2='STATUS',status,'LAST CONTACT','No data'
         if asset.asset_type=='TANK':
@@ -276,7 +264,8 @@ def dashboard():
         cards.append({'asset':asset,'status':status,'metric_1_label':l1,'metric_1_value':v1,'metric_2_label':l2,'metric_2_value':v2,'device_type':device.device_type if device else 'No device assigned','last_seen':seen})
         if status in ('CRITICAL','WARNING','OFFLINE'):attention.append({'asset':asset,'status':status,'message':'Communication timeout' if status=='OFFLINE' else 'Active condition requires review'})
         loc=Location.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).order_by(desc(Location.sampled_at)).first()
-        if loc:mapped.append({'id':asset.id,'name':asset.name,'type':asset.asset_type,'status':status,'lat':loc.latitude,'lon':loc.longitude})
+        device_fresh=bool(device and device.last_seen and now-aware(device.last_seen)<=timedelta(minutes=30))
+        if loc and device_fresh:mapped.append({'id':asset.id,'name':asset.name,'type':asset.asset_type,'status':status,'lat':loc.latitude,'lon':loc.longitude})
     order={'CRITICAL':0,'WARNING':1,'OFFLINE':2};attention.sort(key=lambda x:order.get(x['status'],9))
     recent=[]
     for alarm in Alarm.query.filter_by(customer_id=tenant_id()).order_by(desc(Alarm.opened_at)).limit(8):
@@ -289,38 +278,118 @@ def dashboard():
 @bp.get('/admin/test-data-cleanup')
 @login_required
 def test_data_cleanup():
-    assets=Asset.query.filter_by(customer_id=tenant_id()).order_by(Asset.name).all()
+    assets=Asset.query.filter_by(customer_id=tenant_id()).order_by(Asset.name,Asset.id).all()
     items=[]
     for asset in assets:
-        active_device=Device.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,active=True).first()
-        items.append({'asset':asset,'active_device':active_device,'locations':Location.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).count(),'readings':Reading.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).count(),'alarms':Alarm.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).count()})
+        active_device=active_device_for(asset)
+        items.append({'asset':asset,'active_device':active_device,
+            'devices':Device.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).count(),
+            'locations':Location.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).count(),
+            'readings':Reading.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).count(),
+            'alarms':Alarm.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).count()})
     return render_template('test_data_cleanup.html',items=items)
 
 @bp.post('/admin/test-data-cleanup/<int:asset_id>')
 @login_required
 def clean_test_asset(asset_id):
     asset=Asset.query.filter_by(id=asset_id,customer_id=tenant_id()).first_or_404()
-    if Device.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,active=True).first():
-        flash('Cleanup blocked: active device assigned.','error');return redirect(url_for('main.test_data_cleanup'))
+    if active_device_for(asset):
+        flash('Delete blocked: an active device is assigned. Disable or replace the device first.','error')
+        return redirect(url_for('main.test_data_cleanup'))
     if request.form.get('confirm_name','').strip()!=asset.name or request.form.get('confirm_word','').strip().upper()!='DELETE':
-        flash('Type the exact asset name and DELETE.','error');return redirect(url_for('main.test_data_cleanup'))
-    action=request.form.get('action','')
+        flash('Type the exact asset name and DELETE.','error')
+        return redirect(url_for('main.test_data_cleanup'))
+    action=request.form.get('action','delete_all')
+    # Remove retained operational data first.
+    Reading.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
+    Location.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
+    Alarm.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
+    CoreAlarmState.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
+    DataDeletionRequest.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
+    MobileConsent.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
+    MobileTrackerRegistration.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
+    SecurityAuditEvent.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
+    AssetFeatureOverride.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
+    AssetAlertSettings.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
+    IntegrationSignalMapping.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
+    UniversalSourceMapping.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
+    MqttTopicMapping.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
     if action=='clear_history':
-        Reading.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
-        Location.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
-        Alarm.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
-        asset.last_seen=None;asset.status='UNASSIGNED'
-        audit(tenant_id(),'TEST_HISTORY_CLEARED',asset.id,None,'USER',current_user.id,'Asset test telemetry cleared')
-        db.session.commit();flash(f'History cleared for {asset.name}. Now choose Delete empty asset.','ok')
-    elif action=='delete_empty_asset':
-        has_history=(Location.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).first() or Reading.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).first() or Alarm.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).first())
-        if has_history:flash('Asset still contains history. Clear retained history first.','error')
-        else:
-            AssetFeatureOverride.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
-            AssetAlertSettings.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
-            SignalDefinition.query.filter_by(asset_id=asset.id).delete(synchronize_session=False)
-            name=asset.name;db.session.delete(asset);db.session.commit();flash(f'Empty test asset {name} deleted.','ok')
+        asset.last_seen=None;asset.status='UNASSIGNED';db.session.commit()
+        flash(f'History cleared for {asset.name}. The asset was retained.','ok')
+        return redirect(url_for('main.test_data_cleanup'))
+    Device.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
+    SignalDefinition.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
+    name=asset.name;db.session.delete(asset);db.session.commit()
+    audit(tenant_id(),'TEST_ASSET_DELETED',None,None,'USER',current_user.id,f'Test asset deleted: {name}')
+    db.session.commit();flash(f'{name} and all retained test history were deleted.','ok')
     return redirect(url_for('main.test_data_cleanup'))
+
+def _distance_km(a,b):
+    import math
+    lat1,lon1,lat2,lon2=map(math.radians,(a.latitude,a.longitude,b.latitude,b.longitude))
+    value=math.sin((lat2-lat1)/2)**2+math.cos(lat1)*math.cos(lat2)*math.sin((lon2-lon1)/2)**2
+    return 2*6371.0088*math.asin(min(1,math.sqrt(value)))
+
+def analyse_tracking_points(rows):
+    accepted=[];rejected=[];journeys=[];stops=[];current=[];previous=None;distance=0.0;maximum=0.0
+    stop_start=None;stop_point=None
+    for point in rows:
+        reason=None;sampled=aware(point.sampled_at);accuracy=max(0.0,float(point.accuracy_m or 0));speed=max(0.0,float(point.speed_kmh or 0))
+        if accuracy>150:reason='POOR_ACCURACY'
+        if previous and not reason:
+            elapsed=(sampled-aware(previous.sampled_at)).total_seconds();segment=_distance_km(previous,point)
+            calculated=segment/(elapsed/3600) if elapsed>0 else 99999
+            if elapsed<=0:reason='OUT_OF_ORDER'
+            elif calculated>220:reason='IMPOSSIBLE_JUMP'
+            elif speed<3 and float(previous.speed_kmh or 0)<3 and segment>max(.25,(accuracy+float(previous.accuracy_m or 0))/1000*2) and elapsed<600:reason='STATIONARY_JUMP'
+        item={'latitude':point.latitude,'longitude':point.longitude,'accuracy':accuracy,'speed':speed,'timestamp':sampled.strftime('%Y-%m-%d %H:%M:%S UTC')}
+        if reason:
+            item['reason']=reason;rejected.append(item);continue
+        if previous:
+            gap=(sampled-aware(previous.sampled_at)).total_seconds()
+            if gap>1200 and current:
+                journeys.append(current);current=[]
+            elif gap>0:distance+=_distance_km(previous,point)
+        accepted.append(item);current.append(item);maximum=max(maximum,speed)
+        if speed<3:
+            if stop_start is None:stop_start=sampled;stop_point=point
+        elif stop_start is not None:
+            duration=(sampled-stop_start).total_seconds()
+            if duration>=300:stops.append({'started':stop_start.strftime('%Y-%m-%d %H:%M UTC'),'duration_minutes':round(duration/60),'latitude':stop_point.latitude,'longitude':stop_point.longitude})
+            stop_start=None;stop_point=None
+        previous=point
+    if current:journeys.append(current)
+    journey_rows=[]
+    for index,group in enumerate(journeys,1):
+        total=sum(_distance_dict(group[i-1],group[i]) for i in range(1,len(group)))
+        journey_rows.append({'number':index,'distance_km':round(total,2),'started':group[0]['timestamp'],'ended':group[-1]['timestamp'],'points':len(group)})
+    return {'points':accepted,'rejected':rejected,'journeys':journey_rows,'stops':stops,'distance_km':round(distance,2),'max_speed':round(maximum)}
+
+def _distance_dict(a,b):
+    import math
+    lat1,lon1,lat2,lon2=map(math.radians,(a['latitude'],a['longitude'],b['latitude'],b['longitude']))
+    value=math.sin((lat2-lat1)/2)**2+math.cos(lat1)*math.cos(lat2)*math.sin((lon2-lon1)/2)**2
+    return 2*6371.0088*math.asin(min(1,math.sqrt(value)))
+
+@bp.get('/asset/<int:asset_id>/tracking')
+@login_required
+def tracking_history(asset_id):
+    asset=Asset.query.filter_by(id=asset_id,customer_id=tenant_id()).first_or_404()
+    now=utcnow();preset=request.args.get('range','today')
+    if preset=='24h':start=now-timedelta(hours=24)
+    elif preset=='7d':start=now-timedelta(days=7)
+    elif request.args.get('from'):
+        try:start=datetime.fromisoformat(request.args['from']).replace(tzinfo=timezone.utc)
+        except ValueError:start=now.replace(hour=0,minute=0,second=0,microsecond=0)
+    else:start=now.replace(hour=0,minute=0,second=0,microsecond=0)
+    if request.args.get('to'):
+        try:end=datetime.fromisoformat(request.args['to']).replace(tzinfo=timezone.utc)
+        except ValueError:end=now
+    else:end=now
+    if start>end:start,end=end,start
+    rows=Location.query.filter(Location.customer_id==tenant_id(),Location.asset_id==asset.id,Location.sampled_at>=start,Location.sampled_at<=end).order_by(Location.sampled_at).limit(10000).all()
+    return render_template('tracking_history.html',asset=asset,start=start,end=end,analysis=analyse_tracking_points(rows))
 
 @bp.get('/asset/<int:asset_id>')
 @login_required
