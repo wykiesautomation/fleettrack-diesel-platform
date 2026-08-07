@@ -491,8 +491,9 @@ def account():
 @bp.route('/devices/connect',methods=['GET','POST'])
 @login_required
 def connect_device():
-    assets=Asset.query.filter_by(customer_id=tenant_id()).order_by(Asset.name).all()
     sites=Site.query.filter_by(customer_id=tenant_id()).order_by(Site.name).all()
+    active_asset_ids={row.asset_id for row in Device.query.filter_by(customer_id=tenant_id(),active=True).all() if row.asset_id}
+    assets=[asset for asset in Asset.query.filter_by(customer_id=tenant_id(),asset_type='TRACKER').order_by(Asset.name).all() if asset.id not in active_asset_ids]
     if request.method=='POST':
         device_kind=request.form.get('device_kind','ANDROID_PHONE').strip().upper()
         if device_kind!='ANDROID_PHONE':
@@ -500,15 +501,38 @@ def connect_device():
             return redirect(url_for('main.connect_device'))
         asset_mode=request.form.get('asset_mode','existing')
         if asset_mode=='new':
-            name=request.form.get('asset_name','').strip();site_id=request.form.get('site_id',type=int)
-            site=Site.query.filter_by(id=site_id,customer_id=tenant_id()).first()
-            if len(name)<2 or not site:flash('Choose a site and enter an asset name.','error');return redirect(url_for('main.connect_device'))
-            asset=Asset(customer_id=tenant_id(),site_id=site.id,name=name,asset_type='TRACKER',status='UNASSIGNED',metadata_json={'onboarding_source':'DEVICE_CENTRE'});db.session.add(asset);db.session.flush()
+            name=request.form.get('asset_name','').strip()
+            site_mode=request.form.get('site_mode','existing')
+            site=None
+            if site_mode=='new':
+                site_name=request.form.get('new_site_name','').strip()
+                site_location=request.form.get('new_site_location','').strip()
+                if len(site_name)<2:
+                    flash('Enter a site name before continuing.','error')
+                    return redirect(url_for('main.connect_device'))
+                site=Site.query.filter_by(customer_id=tenant_id(),name=site_name).first()
+                if not site:
+                    site=Site(customer_id=tenant_id(),name=site_name,location=site_location or None)
+                    db.session.add(site);db.session.flush()
+            else:
+                site_id=request.form.get('site_id',type=int)
+                site=Site.query.filter_by(id=site_id,customer_id=tenant_id()).first()
+                if not site:
+                    flash('Choose an existing site or create a new site below.','error')
+                    return redirect(url_for('main.connect_device'))
+            if len(name)<2:
+                flash('Enter an asset name before continuing.','error')
+                return redirect(url_for('main.connect_device'))
+            asset=Asset(customer_id=tenant_id(),site_id=site.id,name=name,asset_type='TRACKER',status='UNASSIGNED',metadata_json={'onboarding_source':'DEVICE_CENTRE'})
+            db.session.add(asset);db.session.flush();create_default_signals(asset)
         else:
-            asset=Asset.query.filter_by(id=request.form.get('asset_id',type=int),customer_id=tenant_id()).first()
-            if not asset:flash('Choose an existing asset.','error');return redirect(url_for('main.connect_device'))
-        active=Device.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,active=True).first()
-        if active:flash('This asset already has an active device. Use Replace Phone from Device Registry.','error');return redirect(url_for('main.connect_device'))
+            asset=Asset.query.filter_by(id=request.form.get('asset_id',type=int),customer_id=tenant_id(),asset_type='TRACKER').first()
+            if not asset:
+                flash('No unassigned tracking asset was selected. Create a new asset below.','error')
+                return redirect(url_for('main.connect_device'))
+            if asset.id in active_asset_ids:
+                flash('This asset already has an active device. Use Replace Phone from Device Registry.','error')
+                return redirect(url_for('main.connect_device'))
         MobileTrackerRegistration.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,used_at=None).delete(synchronize_session=False)
         code=f'{secrets.token_hex(2).upper()}-{secrets.token_hex(2).upper()}'
         reg=MobileTrackerRegistration(customer_id=tenant_id(),asset_id=asset.id,code_hash=mobile_code_hash(code),device_uid=f'AT360-PHONE-{asset.id:06d}',expires_at=utcnow()+timedelta(minutes=30),created_by=current_user.id)
@@ -516,8 +540,7 @@ def connect_device():
         session['onboarding_registration_id']=reg.id;session['onboarding_registration_code']=code
         audit(tenant_id(),'DEVICE_ONBOARDING_STARTED',asset.id,None,'USER',current_user.id,'Android phone onboarding started');db.session.commit()
         return redirect(url_for('main.connect_device_waiting'))
-    return render_template('connect_device.html',assets=assets,sites=sites)
-
+    return render_template('connect_device.html',assets=assets,sites=sites,has_sites=bool(sites),has_assets=bool(assets))
 @bp.get('/devices/connect/waiting')
 @login_required
 def connect_device_waiting():
