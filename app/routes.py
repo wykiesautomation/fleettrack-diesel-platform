@@ -275,28 +275,31 @@ def dashboard():
     tank={'count':tank_count,'capacity':tank_capacity,'volume':tank_volume,'percent':tank_volume/tank_capacity*100 if tank_capacity else 0,'low_count':low_count}
     return render_template('dashboard.html',assets=assets,sites=sites,site_count=len(sites),device_count=len(devices),counts=counts,asset_cards=cards,attention_items=attention,mapped_assets=mapped,tank_summary=tank,connectivity=connectivity,recent_events=recent,generated_at=now)
 
-@bp.route('/admin/test-data-cleanup',methods=['GET','POST'])
+@bp.get('/admin/test-data-cleanup')
 @login_required
 def test_data_cleanup():
-    if request.method=='POST':
-        asset_id=request.form.get('asset_id',type=int)
-        asset=Asset.query.filter_by(id=asset_id,customer_id=tenant_id()).first_or_404()
-        if active_device_for(asset):return jsonify(ok=False,error='Active device assigned.'),409
-        if request.form.get('confirm_name','').strip()!=asset.name or request.form.get('confirm_word','').strip().upper()!='DELETE':return jsonify(ok=False,error='Confirmation did not match.'),400
-        try:
-            for model in (Reading,Location,Alarm,CoreAlarmState,DataDeletionRequest,MobileConsent,MobileTrackerRegistration,SecurityAuditEvent,AssetFeatureOverride,AssetAlertSettings,IntegrationSignalMapping,UniversalSourceMapping,MqttTopicMapping):
-                model.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
-            if request.form.get('action','delete_all')=='clear_history':
-                asset.last_seen=None;asset.status='UNASSIGNED';db.session.commit();return jsonify(ok=True,message='History cleared.')
-            Device.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
-            SignalDefinition.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
-            name=asset.name;db.session.delete(asset);db.session.commit();return jsonify(ok=True,message=f'{name} deleted.')
-        except Exception as exc:
-            db.session.rollback();current_app.logger.exception('Cleanup failed asset_id=%s',asset_id);return jsonify(ok=False,error=f'Database cleanup failed: {type(exc).__name__}'),500
     assets=Asset.query.filter_by(customer_id=tenant_id()).order_by(Asset.name,Asset.id).all();items=[]
     for asset in assets:
         items.append({'asset':asset,'active_device':active_device_for(asset),'devices':Device.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).count(),'locations':Location.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).count(),'readings':Reading.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).count(),'alarms':Alarm.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).count()})
     return render_template('test_data_cleanup.html',items=items)
+
+@bp.post('/admin/test-data-cleanup/delete')
+@login_required
+def delete_test_asset():
+    asset_id=request.form.get('asset_id',type=int)
+    asset=Asset.query.filter_by(id=asset_id,customer_id=tenant_id()).first_or_404()
+    if active_device_for(asset):return jsonify(ok=False,error='Active device assigned.'),409
+    if request.form.get('confirm_name','').strip()!=asset.name or request.form.get('confirm_word','').strip().upper()!='DELETE':return jsonify(ok=False,error='Confirmation did not match.'),400
+    try:
+        for model in (Reading,Location,Alarm,CoreAlarmState,DataDeletionRequest,MobileConsent,MobileTrackerRegistration,SecurityAuditEvent,AssetFeatureOverride,AssetAlertSettings,IntegrationSignalMapping,UniversalSourceMapping,MqttTopicMapping):
+            model.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
+        if request.form.get('action','delete_all')=='clear_history':
+            asset.last_seen=None;asset.status='UNASSIGNED';db.session.commit();return jsonify(ok=True,message='History cleared.')
+        Device.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
+        SignalDefinition.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
+        name=asset.name;db.session.delete(asset);db.session.commit();return jsonify(ok=True,message=f'{name} deleted.')
+    except Exception as exc:
+        db.session.rollback();current_app.logger.exception('Cleanup failed asset_id=%s',asset_id);return jsonify(ok=False,error=f'Database cleanup failed: {type(exc).__name__}'),500
 
 def _distance_km(a,b):
     import math
