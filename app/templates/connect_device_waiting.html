@@ -9,7 +9,7 @@
 <div class="wrap"><span class="eyebrow">ANDROID PHONE ONBOARDING</span><h1>Connect {{asset.name}}</h1>
 <div class="panel"><p>Scan the QR code with the AssetOps 360 Android app, or enter the one-time code manually. The QR contains no permanent device token.</p>
 <div class="connect-grid">
- <section class="qr-card"><span class="eyebrow">FASTEST METHOD</span><h2>Scan to Register</h2><div id="qr" class="qr-box"></div><p>In the Android app, tap <b>Scan QR Code</b>.</p></section>
+ <section class="qr-card"><span class="eyebrow">FASTEST METHOD</span><h2>Scan to Register</h2><div id="qr" class="qr-box"><img src="{{ url_for('main.device_onboarding_qr', registration_id=registration.id) }}?v={{ registration.id }}" width="240" height="240" alt="Scan to register {{ asset.name }}" loading="eager"></div><p>In the Android app, tap <b>Scan QR Code</b>.</p></section>
  <section class="code-card"><span class="eyebrow">MANUAL FALLBACK</span><h2>Enter Code</h2><div class="code" id="code">{{code}}</div><button class="button" type="button" id="copy">Copy Code</button><p class="timer">Expires in <span id="countdown">30:00</span></p></section>
 </div>
 <div class="steps"><div class="step"><b>1</b><br>Open AssetOps 360.</div><div class="step"><b>2</b><br>Tap Scan QR Code.</div><div class="step"><b>3</b><br>Accept the privacy notice.</div><div class="step"><b>4</b><br>Tap Register Phone.</div></div>
@@ -19,10 +19,8 @@
 </div></div>
 {% endblock %}
 {% block scripts %}
-<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js" integrity="sha512-CNgIRecGo7nphbeZ04Sc13ka07dIaFavaY19+zLaYpE+dTNj7mQaF7AUvhnKSo7fE4Z3iYEK2rYk1YUWzQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+
 <script>
-const registrationPayload=JSON.stringify({type:'assetops360_registration',version:1,api:location.origin,code:'{{code|e}}'});
-new QRCode(document.getElementById('qr'),{text:registrationPayload,width:240,height:240,colorDark:'#03121d',colorLight:'#ffffff',correctLevel:QRCode.CorrectLevel.M});
 document.getElementById('copy').onclick=async()=>{await navigator.clipboard.writeText(document.getElementById('code').textContent.trim());document.getElementById('copy').textContent='Copied'};
 const expiresAt=new Date('{{registration.expires_at.isoformat()}}Z').getTime();
 function tick(){const left=Math.max(0,expiresAt-Date.now()),m=String(Math.floor(left/60000)).padStart(2,'0'),s=String(Math.floor(left%60000/1000)).padStart(2,'0');document.getElementById('countdown').textContent=`${m}:${s}`;if(left<=0){document.getElementById('status').innerHTML='<b>Registration code expired.</b> Generate a new code from Connect Device.';return}setTimeout(tick,1000)}tick();
