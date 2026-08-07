@@ -1,1 +1,19 @@
-{% extends 'base.html' %}{% block title %}Test Data Cleanup | AssetOps 360{% endblock %}{% block head_extra %}<style>.wrap{max-width:1150px;margin:auto}.warning{background:#2b2110;border:1px solid #9a7224;border-radius:15px;padding:16px}.grid{display:grid;gap:13px;margin-top:18px}.card{background:#102942;border:1px solid #28516a;border-radius:17px;padding:17px}.facts{display:flex;gap:18px;flex-wrap:wrap;color:var(--muted)}.forms{display:grid;grid-template-columns:1fr 120px 170px 170px;gap:8px;margin-top:13px}.forms input,.forms select,.forms button{padding:10px;border-radius:8px;border:1px solid #486173;background:#071724;color:white}.blocked{color:var(--orange)}@media(max-width:760px){.forms{grid-template-columns:1fr}}</style>{% endblock %}{% block body %}<div class="wrap"><span class="eyebrow">ADMIN SAFETY TOOL</span><h1>Test Data Cleanup</h1><div class="warning"><b>Protected cleanup</b><p>Active devices cannot be cleaned or deleted. Clear retained test history first. Empty asset deletion requires the exact asset name and DELETE.</p></div><div class="grid">{% for x in items %}<article class="card"><h2>{{x.asset.name}}</h2><div class="facts"><span>Type: {{x.asset.asset_type}}</span><span>Locations: {{x.locations}}</span><span>Readings: {{x.readings}}</span><span>Alarms: {{x.alarms}}</span></div>{% if x.active_device %}<p class="blocked"><b>BLOCKED:</b> Active device {{x.active_device.device_uid}} assigned.</p>{% else %}<form method="post" action="/admin/test-data-cleanup/{{x.asset.id}}" class="forms"><input name="confirm_name" placeholder="Type exact asset name" required><input name="confirm_word" placeholder="DELETE" required><select name="action"><option value="clear_history">Clear retained history</option><option value="delete_empty_asset">Delete empty asset</option></select><button onclick="return confirm('Perform selected cleanup action?')">Run Cleanup</button></form>{% endif %}</article>{% else %}<p>No assets.</p>{% endfor %}</div></div>{% endblock %}
+{% extends 'base.html' %}
+{% block title %}Test Data Cleanup | AssetOps 360{% endblock %}
+{% block head_extra %}
+<style>
+.wrap{max-width:1150px;margin:auto}.warning{background:#2b2110;border:1px solid #9a7224;border-radius:15px;padding:16px}.grid{display:grid;gap:13px;margin-top:18px}.card{background:#102942;border:1px solid #28516a;border-radius:17px;padding:17px}.facts{display:flex;gap:18px;flex-wrap:wrap;color:var(--muted)}.forms{display:grid;grid-template-columns:1fr 120px 190px 150px;gap:8px;margin-top:13px}.forms input,.forms select,.forms button{padding:10px;border-radius:8px;border:1px solid #486173;background:#071724;color:white}.blocked{color:var(--orange)}@media(max-width:760px){.forms{grid-template-columns:1fr}}
+</style>
+{% endblock %}
+{% block body %}
+<div class="wrap"><span class="eyebrow">ADMIN SAFETY TOOL</span><h1>Test Data Cleanup</h1>
+<div class="warning"><b>Keep JP Phone Tracker</b><p>For old test assets, first clear retained history. Then run Delete empty asset. Active devices are protected.</p></div>
+<div class="grid">{% for x in items %}<article class="card"><h2>{{x.asset.name}}</h2>
+<div class="facts"><span>Type: {{x.asset.asset_type}}</span><span>Locations: {{x.locations}}</span><span>Readings: {{x.readings}}</span><span>Alarms: {{x.alarms}}</span></div>
+{% if x.active_device %}<p class="blocked"><b>BLOCKED:</b> Active device {{x.active_device.device_uid}} is assigned.</p>
+{% else %}<form method="post" action="/admin/test-data-cleanup/{{x.asset.id}}" class="forms">
+<input name="confirm_name" placeholder="Type exact asset name" required><input name="confirm_word" placeholder="DELETE" required>
+<select name="action"><option value="clear_history">1. Clear retained history</option><option value="delete_empty_asset">2. Delete empty asset</option></select>
+<button onclick="return confirm('Perform selected cleanup action?')">Run Cleanup</button></form>{% endif %}
+</article>{% else %}<p>No assets.</p>{% endfor %}</div></div>
+{% endblock %}
