@@ -275,55 +275,28 @@ def dashboard():
     tank={'count':tank_count,'capacity':tank_capacity,'volume':tank_volume,'percent':tank_volume/tank_capacity*100 if tank_capacity else 0,'low_count':low_count}
     return render_template('dashboard.html',assets=assets,sites=sites,site_count=len(sites),device_count=len(devices),counts=counts,asset_cards=cards,attention_items=attention,mapped_assets=mapped,tank_summary=tank,connectivity=connectivity,recent_events=recent,generated_at=now)
 
-@bp.get('/admin/test-data-cleanup')
+@bp.route('/admin/test-data-cleanup',methods=['GET','POST'])
 @login_required
 def test_data_cleanup():
-    assets=Asset.query.filter_by(customer_id=tenant_id()).order_by(Asset.name,Asset.id).all()
-    items=[]
+    if request.method=='POST':
+        asset_id=request.form.get('asset_id',type=int)
+        asset=Asset.query.filter_by(id=asset_id,customer_id=tenant_id()).first_or_404()
+        if active_device_for(asset):return jsonify(ok=False,error='Active device assigned.'),409
+        if request.form.get('confirm_name','').strip()!=asset.name or request.form.get('confirm_word','').strip().upper()!='DELETE':return jsonify(ok=False,error='Confirmation did not match.'),400
+        try:
+            for model in (Reading,Location,Alarm,CoreAlarmState,DataDeletionRequest,MobileConsent,MobileTrackerRegistration,SecurityAuditEvent,AssetFeatureOverride,AssetAlertSettings,IntegrationSignalMapping,UniversalSourceMapping,MqttTopicMapping):
+                model.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
+            if request.form.get('action','delete_all')=='clear_history':
+                asset.last_seen=None;asset.status='UNASSIGNED';db.session.commit();return jsonify(ok=True,message='History cleared.')
+            Device.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
+            SignalDefinition.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
+            name=asset.name;db.session.delete(asset);db.session.commit();return jsonify(ok=True,message=f'{name} deleted.')
+        except Exception as exc:
+            db.session.rollback();current_app.logger.exception('Cleanup failed asset_id=%s',asset_id);return jsonify(ok=False,error=f'Database cleanup failed: {type(exc).__name__}'),500
+    assets=Asset.query.filter_by(customer_id=tenant_id()).order_by(Asset.name,Asset.id).all();items=[]
     for asset in assets:
-        active_device=active_device_for(asset)
-        items.append({'asset':asset,'active_device':active_device,
-            'devices':Device.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).count(),
-            'locations':Location.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).count(),
-            'readings':Reading.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).count(),
-            'alarms':Alarm.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).count()})
+        items.append({'asset':asset,'active_device':active_device_for(asset),'devices':Device.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).count(),'locations':Location.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).count(),'readings':Reading.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).count(),'alarms':Alarm.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).count()})
     return render_template('test_data_cleanup.html',items=items)
-
-@bp.post('/admin/test-data-cleanup/<int:asset_id>')
-@login_required
-def clean_test_asset(asset_id):
-    asset=Asset.query.filter_by(id=asset_id,customer_id=tenant_id()).first_or_404()
-    if active_device_for(asset):
-        flash('Delete blocked: an active device is assigned. Disable or replace the device first.','error')
-        return redirect(url_for('main.test_data_cleanup'))
-    if request.form.get('confirm_name','').strip()!=asset.name or request.form.get('confirm_word','').strip().upper()!='DELETE':
-        flash('Type the exact asset name and DELETE.','error')
-        return redirect(url_for('main.test_data_cleanup'))
-    action=request.form.get('action','delete_all')
-    # Remove retained operational data first.
-    Reading.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
-    Location.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
-    Alarm.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
-    CoreAlarmState.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
-    DataDeletionRequest.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
-    MobileConsent.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
-    MobileTrackerRegistration.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
-    SecurityAuditEvent.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
-    AssetFeatureOverride.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
-    AssetAlertSettings.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
-    IntegrationSignalMapping.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
-    UniversalSourceMapping.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
-    MqttTopicMapping.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
-    if action=='clear_history':
-        asset.last_seen=None;asset.status='UNASSIGNED';db.session.commit()
-        flash(f'History cleared for {asset.name}. The asset was retained.','ok')
-        return redirect(url_for('main.test_data_cleanup'))
-    Device.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
-    SignalDefinition.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
-    name=asset.name;db.session.delete(asset);db.session.commit()
-    audit(tenant_id(),'TEST_ASSET_DELETED',None,None,'USER',current_user.id,f'Test asset deleted: {name}')
-    db.session.commit();flash(f'{name} and all retained test history were deleted.','ok')
-    return redirect(url_for('main.test_data_cleanup'))
 
 def _distance_km(a,b):
     import math
