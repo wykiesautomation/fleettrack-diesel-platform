@@ -35,17 +35,33 @@ def match_route(rows):
         geometry=(item.get('geometry') or {}).get('coordinates') or [];confidence=max(confidence,float(item.get('confidence') or 0))
         if len(geometry)>1:segments.append([[lat,lon] for lon,lat in geometry])
     return {'status':'matched' if segments else 'raw_only','reason':None if segments else 'no_geometry','segments':segments,'confidence':confidence,'raw_point_count':len(usable)}
-def reverse_geocode(lat,lon):
-    base=os.getenv('GEOCODING_BASE_URL','').rstrip('/')
-    if not base:return {'status':'unavailable','possible_address':None,'reason':'provider_not_configured'}
-    key=f'{round(float(lat),4)},{round(float(lon),4)}';now=time.time();cached=_CACHE.get(key)
-    if cached and now-cached[0]<86400:return cached[1]
-    query=urllib.parse.urlencode({'lat':lat,'lon':lon,'format':'jsonv2','addressdetails':1,'zoom':18})
-    try:data=_json_get(f'{base}/reverse?{query}')
-    except Exception:return {'status':'unavailable','possible_address':None,'reason':'provider_unavailable'}
-    address=data.get('address') or {};parts=[]
-    for field in ('road','suburb','city','town','municipality','state','country'):
+def _first(address,*fields):
+    for field in fields:
         value=address.get(field)
-        if value and value not in parts:parts.append(value)
-    result={'status':'ok','possible_address':', '.join(parts) or data.get('display_name'),'road':address.get('road'),'area':address.get('suburb'),'city':address.get('city') or address.get('town'),'state':address.get('state'),'country':address.get('country'),'source':'Configured geocoding provider'}
+        if value:return str(value).strip()
+    return None
+
+def reverse_geocode(lat,lon,accuracy_m=None,force_refresh=False):
+    base=os.getenv('GEOCODING_BASE_URL','https://nominatim.openstreetmap.org').rstrip('/')
+    key=f'{round(float(lat),4)},{round(float(lon),4)}';now=time.time();cached=_CACHE.get(key)
+    if cached and not force_refresh and now-cached[0]<86400:return cached[1]
+    query=urllib.parse.urlencode({'lat':lat,'lon':lon,'format':'jsonv2','addressdetails':1,'zoom':18,'accept-language':'en'})
+    try:data=_json_get(f'{base}/reverse?{query}')
+    except Exception as exc:return {'status':'unavailable','possible_address':None,'reason':'provider_unavailable','detail':str(exc)[:120]}
+    address=data.get('address') or {};accuracy=float(accuracy_m or 0)
+    number=_first(address,'house_number');road=_first(address,'road','pedestrian','footway','path','residential')
+    area=_first(address,'suburb','neighbourhood','quarter','city_district');city=_first(address,'city','town','village','municipality')
+    province=_first(address,'state','province');postcode=_first(address,'postcode');country=_first(address,'country')
+    street=' '.join(x for x in (number,road) if x)
+    precision='possible_street_address' if accuracy and accuracy<=25 else 'possible_street_or_area' if accuracy and accuracy<=100 else 'approximate_area' if accuracy>100 else 'possible_address'
+    if accuracy>25 and road:street=road
+    lines=[]
+    if street:lines.append(street)
+    locality=', '.join(x for x in (area,city) if x and x not in lines)
+    if locality:lines.append(locality)
+    region=', '.join(x for x in (province,postcode) if x)
+    if region:lines.append(region)
+    if country:lines.append(country)
+    possible=', '.join(lines) or data.get('display_name')
+    result={'status':'ok' if possible else 'unavailable','possible_address':possible,'address_lines':lines,'house_number':number if accuracy<=25 or not accuracy else None,'road':road,'area':area,'city':city,'state':province,'postcode':postcode,'country':country,'precision':precision,'accuracy_m':accuracy_m,'source':'OpenStreetMap Nominatim' if 'nominatim.openstreetmap.org' in base else 'Configured geocoding provider'}
     _CACHE[key]=(now,result);return result

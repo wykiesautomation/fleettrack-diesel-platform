@@ -1085,10 +1085,11 @@ def route_intelligence_api(asset_id):
 @bp.get('/api/v1/reverse-geocode')
 @login_required
 def reverse_geocode_api():
-    try:lat=float(request.args['lat']);lon=float(request.args['lon'])
+    try:
+        lat=float(request.args['lat']);lon=float(request.args['lon']);accuracy=float(request.args.get('accuracy_m') or 0)
     except (KeyError,TypeError,ValueError):return jsonify(error='valid_lat_lon_required'),400
     if not (-90<=lat<=90 and -180<=lon<=180):return jsonify(error='coordinates_out_of_range'),400
-    return jsonify(reverse_geocode(lat,lon))
+    return jsonify(reverse_geocode(lat,lon,accuracy_m=accuracy,force_refresh=request.args.get('refresh','').lower() in ('1','true','yes')))
 
 @bp.get('/api/v1/assets/<int:asset_id>/latest')
 @login_required
