@@ -1,6 +1,6 @@
-import os, secrets, re, hashlib
+import os, secrets, re, hashlib, io, json
 from datetime import datetime, timezone, timedelta
-from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify, abort, session, current_app, send_from_directory
+from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify, abort, session, current_app, send_from_directory, send_file
 from flask_login import login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import desc
@@ -9,6 +9,7 @@ from .payfast import config as payfast_config,build_checkout,event_hash,valid_si
 from .models import Customer,User,Site,Asset,Device,SignalDefinition,Reading,Alarm,Location,WorkspaceProfile,SubscriptionPlan,Subscription,PaymentRecord,PayFastEvent,SubscriptionAuditEvent,IntegrationConnector,IntegrationSignalMapping,IntegrationEvent,ConnectorEndpointConfig,UniversalSourceMapping,WebhookReceipt,EdgeGateway,IntegrationJobEvent,MqttSubscription,MqttTopicMapping,MqttMessageEvent,MobileTrackerRegistration,MobileConsent,SecurityAuditEvent,AssetAlertSettings,CoreAlarmState,DataDeletionRequest,FleetFeatureDefaults,AssetFeatureOverride
 from .route_intelligence import match_route, reverse_geocode, route_quality
 from .security_privacy import POLICY_VERSION,audit,consent_for_device,settings_for,evaluate_mobile,FEATURE_KEYS,MANDATORY_CONTROLS,fleet_defaults_for,entitlement_map,effective_features
+from .seo import SEO_PAGES, render_seo_page
 bp=Blueprint('main',__name__)
 
 def utcnow(): return datetime.now(timezone.utc)
@@ -68,10 +69,18 @@ def mobile_tracker_device():
     return Device.query.filter_by(api_token=token,active=True,device_type='MOBILE_WEB_TRACKER').first() if token else None
 def latest_reading(signal_id):
     return Reading.query.filter_by(signal_id=signal_id).order_by(desc(Reading.sampled_at)).first()
+def active_device_for(asset):
+    return Device.query.filter_by(customer_id=asset.customer_id,asset_id=asset.id,active=True).first()
+
 def asset_status(asset):
-    if not asset.last_seen or utcnow()-asset.last_seen.replace(tzinfo=asset.last_seen.tzinfo or timezone.utc)>timedelta(minutes=30): return 'OFFLINE'
+    device=active_device_for(asset)
+    if not device:
+        return 'UNASSIGNED'
+    if not device.last_seen or utcnow()-aware(device.last_seen)>timedelta(minutes=30):
+        return 'OFFLINE'
     open_alarm=Alarm.query.filter_by(customer_id=asset.customer_id,asset_id=asset.id,state='OPEN').order_by(desc(Alarm.severity)).first()
     return open_alarm.severity if open_alarm else 'HEALTHY'
+
 def scale_signal(sig,raw):
     if sig.source_type!='4-20mA': return raw
     span=sig.raw_max-sig.raw_min
@@ -88,7 +97,7 @@ def evaluate_alarm(sig,value):
     elif severity and existing: existing.severity=severity;existing.message=msg;existing.value=value
     elif existing: existing.state='CLOSED';existing.note=(existing.note or '')+' Auto-closed after return to normal.'
 
-ALLOWED_BILLING_ENDPOINTS={'main.public_home','main.login','main.logout','main.register','main.health','main.billing','main.plans','main.select_plan','main.billing_checkout','main.billing_success','main.billing_cancel','main.payfast_notify','main.subscription_required','static'}
+ALLOWED_BILLING_ENDPOINTS={'main.public_home','main.seo_public_page','main.login','main.logout','main.register','main.health','main.billing','main.plans','main.select_plan','main.billing_checkout','main.billing_success','main.billing_cancel','main.payfast_notify','main.subscription_required','static'}
 
 def set_subscription_state(sub,new_state,reason):
     if sub.state!=new_state:
@@ -114,6 +123,18 @@ def enforce_subscription_access():
     allowed,sub=entitlement_for(current_user.customer_id)
     if not allowed:return redirect(url_for('main.subscription_required'))
 
+@bp.get('/fleet-tracking-south-africa')
+@bp.get('/mobile-phone-tracking')
+@bp.get('/vehicle-gps-tracking')
+@bp.get('/asset-monitoring')
+@bp.get('/industrial-sensor-monitoring')
+@bp.get('/fleet-tracking-api')
+@bp.get('/security-privacy')
+def seo_public_page():
+    slug=request.path.strip('/')
+    rendered=render_seo_page(slug)
+    return rendered if rendered is not None else abort(404)
+
 @bp.get("/health")
 def health():
     return {"status": "ok", "service": "assettrack360-rev17"}
@@ -134,50 +155,27 @@ def google_site_verification():
 
 @bp.get("/robots.txt")
 def robots_txt():
-    body = (
+    body=(
         "User-agent: *\n"
         "Allow: /\n"
-        "Disallow: /dashboard\n"
-        "Disallow: /asset/\n"
-        "Disallow: /devices\n"
-        "Disallow: /account\n"
-        "Disallow: /billing\n"
-        "Disallow: /integrations\n"
-        "Disallow: /edge-gateways\n"
-        "Disallow: /api/\n"
-        "Disallow: /onboarding\n\n"
+        "Disallow: /dashboard\nDisallow: /asset/\nDisallow: /devices\n"
+        "Disallow: /account\nDisallow: /billing\nDisallow: /integrations\n"
+        "Disallow: /edge-gateways\nDisallow: /api/\nDisallow: /onboarding\n"
+        "Disallow: /admin/\nDisallow: /mobile-tracker\n\n"
         "Sitemap: https://fleettrack.wykiesautomation.co.za/sitemap.xml\n"
     )
-    return body, 200, {"Content-Type": "text/plain; charset=utf-8"}
-
-
+    return body,200,{"Content-Type":"text/plain; charset=utf-8"}
 @bp.get("/sitemap.xml")
 def sitemap_xml():
-    base_url = "https://fleettrack.wykiesautomation.co.za"
-    last_modified = datetime.now(timezone.utc).date().isoformat()
-    pages = (
-        ("/", "daily", "1.0"),
-        ("/register", "weekly", "0.9"),
-        ("/login", "monthly", "0.5"),
-        ("/plans", "weekly", "0.8"),
-    )
-    entries = []
-    for path, change_frequency, priority in pages:
-        entries.append(
-            "  <url>\n"
-            f"    <loc>{base_url}{path}</loc>\n"
-            f"    <lastmod>{last_modified}</lastmod>\n"
-            f"    <changefreq>{change_frequency}</changefreq>\n"
-            f"    <priority>{priority}</priority>\n"
-            "  </url>"
-        )
-    xml = '<?xml version="1.0" encoding="UTF-8"?>\n'
-    xml += '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
-    xml += "\n".join(entries)
-    xml += "\n</urlset>\n"
-    return xml, 200, {"Content-Type": "application/xml; charset=utf-8"}
-
-
+    base_url="https://fleettrack.wykiesautomation.co.za"
+    last_modified=utcnow().date().isoformat()
+    pages=[("/","daily","1.0"),("/register","weekly","0.8"),("/plans","weekly","0.8")]
+    pages.extend((page["path"],"weekly","0.9") for page in SEO_PAGES.values())
+    entries=[]
+    for path,change_frequency,priority in pages:
+        entries.append("  <url>\n"+f"    <loc>{base_url}{path}</loc>\n"+f"    <lastmod>{last_modified}</lastmod>\n"+f"    <changefreq>{change_frequency}</changefreq>\n"+f"    <priority>{priority}</priority>\n"+"  </url>")
+    xml='<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'+"\n".join(entries)+"\n</urlset>\n"
+    return xml,200,{"Content-Type":"application/xml; charset=utf-8"}
 @bp.get("/site.webmanifest")
 def site_webmanifest():
     return jsonify(
@@ -244,11 +242,11 @@ def dashboard():
     assets=Asset.query.filter_by(customer_id=tenant_id()).order_by(Asset.name).all()
     sites=Site.query.filter_by(customer_id=tenant_id()).order_by(Site.name).all()
     devices=Device.query.filter_by(customer_id=tenant_id(),active=True).all()
-    now=utcnow(); counts={'HEALTHY':0,'WARNING':0,'CRITICAL':0,'OFFLINE':0}; cards=[]; attention=[]; mapped=[]
+    now=utcnow(); counts={'HEALTHY':0,'WARNING':0,'CRITICAL':0,'OFFLINE':0,'UNASSIGNED':0}; cards=[]; attention=[]; mapped=[]
     tank_capacity=tank_volume=0.0; tank_count=low_count=0
     for asset in assets:
         status=asset_status(asset);asset.status=status;counts[status]=counts.get(status,0)+1
-        device=Device.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,active=True).first()
+        device=active_device_for(asset)
         sigs={x.key:latest_reading(x.id) for x in SignalDefinition.query.filter_by(asset_id=asset.id,enabled=True)}
         l1,v1,l2,v2='STATUS',status,'LAST CONTACT','No data'
         if asset.asset_type=='TANK':
@@ -266,7 +264,8 @@ def dashboard():
         cards.append({'asset':asset,'status':status,'metric_1_label':l1,'metric_1_value':v1,'metric_2_label':l2,'metric_2_value':v2,'device_type':device.device_type if device else 'No device assigned','last_seen':seen})
         if status in ('CRITICAL','WARNING','OFFLINE'):attention.append({'asset':asset,'status':status,'message':'Communication timeout' if status=='OFFLINE' else 'Active condition requires review'})
         loc=Location.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).order_by(desc(Location.sampled_at)).first()
-        if loc:mapped.append({'id':asset.id,'name':asset.name,'type':asset.asset_type,'status':status,'lat':loc.latitude,'lon':loc.longitude})
+        device_fresh=bool(device and device.last_seen and now-aware(device.last_seen)<=timedelta(minutes=30))
+        if loc and device_fresh:mapped.append({'id':asset.id,'name':asset.name,'type':asset.asset_type,'status':status,'lat':loc.latitude,'lon':loc.longitude})
     order={'CRITICAL':0,'WARNING':1,'OFFLINE':2};attention.sort(key=lambda x:order.get(x['status'],9))
     recent=[]
     for alarm in Alarm.query.filter_by(customer_id=tenant_id()).order_by(desc(Alarm.opened_at)).limit(8):
@@ -275,6 +274,106 @@ def dashboard():
     connectivity={'online':online,'offline':max(0,len(devices)-online),'online_percent':online/len(devices)*100 if devices else 0,'firmware_reported':sum(1 for d in devices if d.firmware),'unassigned':sum(1 for a in assets if not any(d.asset_id==a.id for d in devices))}
     tank={'count':tank_count,'capacity':tank_capacity,'volume':tank_volume,'percent':tank_volume/tank_capacity*100 if tank_capacity else 0,'low_count':low_count}
     return render_template('dashboard.html',assets=assets,sites=sites,site_count=len(sites),device_count=len(devices),counts=counts,asset_cards=cards,attention_items=attention,mapped_assets=mapped,tank_summary=tank,connectivity=connectivity,recent_events=recent,generated_at=now)
+
+@bp.get('/admin/test-data-cleanup')
+@login_required
+def test_data_cleanup():
+    assets=Asset.query.filter_by(customer_id=tenant_id()).order_by(Asset.name,Asset.id).all();items=[]
+    for asset in assets:
+        items.append({'asset':asset,'active_device':active_device_for(asset),'devices':Device.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).count(),'locations':Location.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).count(),'readings':Reading.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).count(),'alarms':Alarm.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).count()})
+    return render_template('test_data_cleanup.html',items=items)
+
+@bp.post('/admin/test-data-cleanup/delete')
+@login_required
+def delete_test_asset():
+    asset_id=request.form.get('asset_id',type=int)
+    confirm_name=request.form.get('confirm_name','').strip()
+    confirm_word=request.form.get('confirm_word','').strip().upper()
+    query=Asset.query.filter_by(customer_id=tenant_id())
+    asset=query.filter_by(id=asset_id).first() if asset_id is not None else None
+    if asset is None and confirm_name:
+        matches=query.filter_by(name=confirm_name).order_by(Asset.id).all()
+        if len(matches)==1:asset=matches[0]
+        elif len(matches)>1:return jsonify(ok=False,error='Duplicate asset names found. Use the selected Asset ID.'),409
+    if asset is None:return jsonify(ok=False,error=f'Asset lookup failed: id={asset_id!r}, name={confirm_name!r}'),404
+    if active_device_for(asset):return jsonify(ok=False,error='Active device assigned.'),409
+    if confirm_name!=asset.name or confirm_word!='DELETE':return jsonify(ok=False,error='Confirmation did not match.'),400
+    try:
+        for model in (Reading,Location,Alarm,CoreAlarmState,DataDeletionRequest,MobileConsent,MobileTrackerRegistration,SecurityAuditEvent,AssetFeatureOverride,AssetAlertSettings,IntegrationSignalMapping,UniversalSourceMapping,MqttTopicMapping):
+            model.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
+        if request.form.get('action','delete_all')=='clear_history':
+            asset.last_seen=None;asset.status='UNASSIGNED';db.session.commit();return jsonify(ok=True,message='History cleared.')
+        Device.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
+        SignalDefinition.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
+        name=asset.name;db.session.delete(asset);db.session.commit();return jsonify(ok=True,message=f'{name} deleted.')
+    except Exception as exc:
+        db.session.rollback();current_app.logger.exception('Cleanup failed asset_id=%s',asset_id);return jsonify(ok=False,error=f'Database cleanup failed: {type(exc).__name__}'),500
+
+def _distance_km(a,b):
+    import math
+    lat1,lon1,lat2,lon2=map(math.radians,(a.latitude,a.longitude,b.latitude,b.longitude))
+    value=math.sin((lat2-lat1)/2)**2+math.cos(lat1)*math.cos(lat2)*math.sin((lon2-lon1)/2)**2
+    return 2*6371.0088*math.asin(min(1,math.sqrt(value)))
+
+def analyse_tracking_points(rows):
+    accepted=[];rejected=[];journeys=[];stops=[];current=[];previous=None;distance=0.0;maximum=0.0
+    stop_start=None;stop_point=None
+    for point in rows:
+        reason=None;sampled=aware(point.sampled_at);accuracy=max(0.0,float(point.accuracy_m or 0));speed=max(0.0,float(point.speed_kmh or 0))
+        if accuracy>150:reason='POOR_ACCURACY'
+        if previous and not reason:
+            elapsed=(sampled-aware(previous.sampled_at)).total_seconds();segment=_distance_km(previous,point)
+            calculated=segment/(elapsed/3600) if elapsed>0 else 99999
+            if elapsed<=0:reason='OUT_OF_ORDER'
+            elif calculated>220:reason='IMPOSSIBLE_JUMP'
+            elif speed<3 and float(previous.speed_kmh or 0)<3 and segment>max(.25,(accuracy+float(previous.accuracy_m or 0))/1000*2) and elapsed<600:reason='STATIONARY_JUMP'
+        item={'latitude':point.latitude,'longitude':point.longitude,'accuracy':accuracy,'speed':speed,'timestamp':sampled.strftime('%Y-%m-%d %H:%M:%S UTC')}
+        if reason:
+            item['reason']=reason;rejected.append(item);continue
+        if previous:
+            gap=(sampled-aware(previous.sampled_at)).total_seconds()
+            if gap>1200 and current:
+                journeys.append(current);current=[]
+            elif gap>0:distance+=_distance_km(previous,point)
+        accepted.append(item);current.append(item);maximum=max(maximum,speed)
+        if speed<3:
+            if stop_start is None:stop_start=sampled;stop_point=point
+        elif stop_start is not None:
+            duration=(sampled-stop_start).total_seconds()
+            if duration>=300:stops.append({'started':stop_start.strftime('%Y-%m-%d %H:%M UTC'),'duration_minutes':round(duration/60),'latitude':stop_point.latitude,'longitude':stop_point.longitude})
+            stop_start=None;stop_point=None
+        previous=point
+    if current:journeys.append(current)
+    journey_rows=[]
+    for index,group in enumerate(journeys,1):
+        total=sum(_distance_dict(group[i-1],group[i]) for i in range(1,len(group)))
+        journey_rows.append({'number':index,'distance_km':round(total,2),'started':group[0]['timestamp'],'ended':group[-1]['timestamp'],'points':len(group)})
+    return {'points':accepted,'rejected':rejected,'journeys':journey_rows,'stops':stops,'distance_km':round(distance,2),'max_speed':round(maximum)}
+
+def _distance_dict(a,b):
+    import math
+    lat1,lon1,lat2,lon2=map(math.radians,(a['latitude'],a['longitude'],b['latitude'],b['longitude']))
+    value=math.sin((lat2-lat1)/2)**2+math.cos(lat1)*math.cos(lat2)*math.sin((lon2-lon1)/2)**2
+    return 2*6371.0088*math.asin(min(1,math.sqrt(value)))
+
+@bp.get('/asset/<int:asset_id>/tracking')
+@login_required
+def tracking_history(asset_id):
+    asset=Asset.query.filter_by(id=asset_id,customer_id=tenant_id()).first_or_404()
+    now=utcnow();preset=request.args.get('range','today')
+    if preset=='24h':start=now-timedelta(hours=24)
+    elif preset=='7d':start=now-timedelta(days=7)
+    elif request.args.get('from'):
+        try:start=datetime.fromisoformat(request.args['from']).replace(tzinfo=timezone.utc)
+        except ValueError:start=now.replace(hour=0,minute=0,second=0,microsecond=0)
+    else:start=now.replace(hour=0,minute=0,second=0,microsecond=0)
+    if request.args.get('to'):
+        try:end=datetime.fromisoformat(request.args['to']).replace(tzinfo=timezone.utc)
+        except ValueError:end=now
+    else:end=now
+    if start>end:start,end=end,start
+    rows=Location.query.filter(Location.customer_id==tenant_id(),Location.asset_id==asset.id,Location.sampled_at>=start,Location.sampled_at<=end).order_by(Location.sampled_at).limit(10000).all()
+    return render_template('tracking_history.html',asset=asset,start=start,end=end,analysis=analyse_tracking_points(rows))
 
 @bp.get('/asset/<int:asset_id>')
 @login_required
@@ -392,8 +491,9 @@ def account():
 @bp.route('/devices/connect',methods=['GET','POST'])
 @login_required
 def connect_device():
-    assets=Asset.query.filter_by(customer_id=tenant_id()).order_by(Asset.name).all()
     sites=Site.query.filter_by(customer_id=tenant_id()).order_by(Site.name).all()
+    active_asset_ids={row.asset_id for row in Device.query.filter_by(customer_id=tenant_id(),active=True).all() if row.asset_id}
+    assets=[asset for asset in Asset.query.filter_by(customer_id=tenant_id(),asset_type='TRACKER').order_by(Asset.name).all() if asset.id not in active_asset_ids]
     if request.method=='POST':
         device_kind=request.form.get('device_kind','ANDROID_PHONE').strip().upper()
         if device_kind!='ANDROID_PHONE':
@@ -401,15 +501,38 @@ def connect_device():
             return redirect(url_for('main.connect_device'))
         asset_mode=request.form.get('asset_mode','existing')
         if asset_mode=='new':
-            name=request.form.get('asset_name','').strip();site_id=request.form.get('site_id',type=int)
-            site=Site.query.filter_by(id=site_id,customer_id=tenant_id()).first()
-            if len(name)<2 or not site:flash('Choose a site and enter an asset name.','error');return redirect(url_for('main.connect_device'))
-            asset=Asset(customer_id=tenant_id(),site_id=site.id,name=name,asset_type='TRACKER',status='UNASSIGNED',metadata_json={'onboarding_source':'DEVICE_CENTRE'});db.session.add(asset);db.session.flush()
+            name=request.form.get('asset_name','').strip()
+            site_mode=request.form.get('site_mode','existing')
+            site=None
+            if site_mode=='new':
+                site_name=request.form.get('new_site_name','').strip()
+                site_location=request.form.get('new_site_location','').strip()
+                if len(site_name)<2:
+                    flash('Enter a site name before continuing.','error')
+                    return redirect(url_for('main.connect_device'))
+                site=Site.query.filter_by(customer_id=tenant_id(),name=site_name).first()
+                if not site:
+                    site=Site(customer_id=tenant_id(),name=site_name,location=site_location or None)
+                    db.session.add(site);db.session.flush()
+            else:
+                site_id=request.form.get('site_id',type=int)
+                site=Site.query.filter_by(id=site_id,customer_id=tenant_id()).first()
+                if not site:
+                    flash('Choose an existing site or create a new site below.','error')
+                    return redirect(url_for('main.connect_device'))
+            if len(name)<2:
+                flash('Enter an asset name before continuing.','error')
+                return redirect(url_for('main.connect_device'))
+            asset=Asset(customer_id=tenant_id(),site_id=site.id,name=name,asset_type='TRACKER',status='UNASSIGNED',metadata_json={'onboarding_source':'DEVICE_CENTRE'})
+            db.session.add(asset);db.session.flush();create_default_signals(asset)
         else:
-            asset=Asset.query.filter_by(id=request.form.get('asset_id',type=int),customer_id=tenant_id()).first()
-            if not asset:flash('Choose an existing asset.','error');return redirect(url_for('main.connect_device'))
-        active=Device.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,active=True).first()
-        if active:flash('This asset already has an active device. Use Replace Phone from Device Registry.','error');return redirect(url_for('main.connect_device'))
+            asset=Asset.query.filter_by(id=request.form.get('asset_id',type=int),customer_id=tenant_id(),asset_type='TRACKER').first()
+            if not asset:
+                flash('No unassigned tracking asset was selected. Create a new asset below.','error')
+                return redirect(url_for('main.connect_device'))
+            if asset.id in active_asset_ids:
+                flash('This asset already has an active device. Use Replace Phone from Device Registry.','error')
+                return redirect(url_for('main.connect_device'))
         MobileTrackerRegistration.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,used_at=None).delete(synchronize_session=False)
         code=f'{secrets.token_hex(2).upper()}-{secrets.token_hex(2).upper()}'
         reg=MobileTrackerRegistration(customer_id=tenant_id(),asset_id=asset.id,code_hash=mobile_code_hash(code),device_uid=f'AT360-PHONE-{asset.id:06d}',expires_at=utcnow()+timedelta(minutes=30),created_by=current_user.id)
@@ -417,15 +540,25 @@ def connect_device():
         session['onboarding_registration_id']=reg.id;session['onboarding_registration_code']=code
         audit(tenant_id(),'DEVICE_ONBOARDING_STARTED',asset.id,None,'USER',current_user.id,'Android phone onboarding started');db.session.commit()
         return redirect(url_for('main.connect_device_waiting'))
-    return render_template('connect_device.html',assets=assets,sites=sites)
-
+    return render_template('connect_device.html',assets=assets,sites=sites,has_sites=bool(sites),has_assets=bool(assets))
 @bp.get('/devices/connect/waiting')
 @login_required
 def connect_device_waiting():
     reg_id=session.get('onboarding_registration_id');code=session.get('onboarding_registration_code')
     reg=MobileTrackerRegistration.query.filter_by(id=reg_id,customer_id=tenant_id()).first() if reg_id else None
     if not reg or not code:return redirect(url_for('main.connect_device'))
-    return render_template('connect_device_waiting.html',registration=reg,code=code,asset=reg.asset)
+    if reg.used_at:return redirect(url_for('main.devices'))
+    remaining_seconds=max(0,int((aware(reg.expires_at)-utcnow()).total_seconds()))
+    payload=json.dumps({
+        'type':'assetops360_registration',
+        'version':1,
+        'api':request.url_root.rstrip('/'),
+        'code':str(code).strip().upper(),
+    },separators=(',',':'))
+    from .vendor import segno
+    qr=segno.make(payload,error='m')
+    qr_data_uri=qr.svg_data_uri(scale=6,border=3,dark='#061622',light='#ffffff')
+    return render_template('connect_device_waiting.html',registration=reg,code=code,asset=reg.asset,qr_data_uri=qr_data_uri,remaining_seconds=remaining_seconds)
 
 @bp.get('/api/v1/device-onboarding/status/<int:registration_id>')
 @login_required
@@ -1049,10 +1182,11 @@ def route_intelligence_api(asset_id):
 @bp.get('/api/v1/reverse-geocode')
 @login_required
 def reverse_geocode_api():
-    try:lat=float(request.args['lat']);lon=float(request.args['lon'])
+    try:
+        lat=float(request.args['lat']);lon=float(request.args['lon']);accuracy=float(request.args.get('accuracy_m') or 0)
     except (KeyError,TypeError,ValueError):return jsonify(error='valid_lat_lon_required'),400
     if not (-90<=lat<=90 and -180<=lon<=180):return jsonify(error='coordinates_out_of_range'),400
-    return jsonify(reverse_geocode(lat,lon))
+    return jsonify(reverse_geocode(lat,lon,accuracy_m=accuracy,force_refresh=request.args.get('refresh','').lower() in ('1','true','yes')))
 
 @bp.get('/api/v1/assets/<int:asset_id>/latest')
 @login_required
