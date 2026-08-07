@@ -1,6 +1,6 @@
-import os, secrets, re, hashlib, io, json
+import os, secrets, re, hashlib
 from datetime import datetime, timezone, timedelta
-from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify, abort, session, current_app, send_from_directory, send_file
+from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify, abort, session, current_app, send_from_directory
 from flask_login import login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import desc
@@ -547,18 +547,7 @@ def connect_device_waiting():
     reg_id=session.get('onboarding_registration_id');code=session.get('onboarding_registration_code')
     reg=MobileTrackerRegistration.query.filter_by(id=reg_id,customer_id=tenant_id()).first() if reg_id else None
     if not reg or not code:return redirect(url_for('main.connect_device'))
-    if reg.used_at:return redirect(url_for('main.devices'))
-    remaining_seconds=max(0,int((aware(reg.expires_at)-utcnow()).total_seconds()))
-    payload=json.dumps({
-        'type':'assetops360_registration',
-        'version':1,
-        'api':request.url_root.rstrip('/'),
-        'code':str(code).strip().upper(),
-    },separators=(',',':'))
-    from .vendor import segno
-    qr=segno.make(payload,error='m')
-    qr_data_uri=qr.svg_data_uri(scale=6,border=3,dark='#061622',light='#ffffff')
-    return render_template('connect_device_waiting.html',registration=reg,code=code,asset=reg.asset,qr_data_uri=qr_data_uri,remaining_seconds=remaining_seconds)
+    return render_template('connect_device_waiting.html',registration=reg,code=code,asset=reg.asset)
 
 @bp.get('/api/v1/device-onboarding/status/<int:registration_id>')
 @login_required
