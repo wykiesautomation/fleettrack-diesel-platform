@@ -287,9 +287,17 @@ def test_data_cleanup():
 @login_required
 def delete_test_asset():
     asset_id=request.form.get('asset_id',type=int)
-    asset=Asset.query.filter_by(id=asset_id,customer_id=tenant_id()).first_or_404()
+    confirm_name=request.form.get('confirm_name','').strip()
+    confirm_word=request.form.get('confirm_word','').strip().upper()
+    query=Asset.query.filter_by(customer_id=tenant_id())
+    asset=query.filter_by(id=asset_id).first() if asset_id is not None else None
+    if asset is None and confirm_name:
+        matches=query.filter_by(name=confirm_name).order_by(Asset.id).all()
+        if len(matches)==1:asset=matches[0]
+        elif len(matches)>1:return jsonify(ok=False,error='Duplicate asset names found. Use the selected Asset ID.'),409
+    if asset is None:return jsonify(ok=False,error=f'Asset lookup failed: id={asset_id!r}, name={confirm_name!r}'),404
     if active_device_for(asset):return jsonify(ok=False,error='Active device assigned.'),409
-    if request.form.get('confirm_name','').strip()!=asset.name or request.form.get('confirm_word','').strip().upper()!='DELETE':return jsonify(ok=False,error='Confirmation did not match.'),400
+    if confirm_name!=asset.name or confirm_word!='DELETE':return jsonify(ok=False,error='Confirmation did not match.'),400
     try:
         for model in (Reading,Location,Alarm,CoreAlarmState,DataDeletionRequest,MobileConsent,MobileTrackerRegistration,SecurityAuditEvent,AssetFeatureOverride,AssetAlertSettings,IntegrationSignalMapping,UniversalSourceMapping,MqttTopicMapping):
             model.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).delete(synchronize_session=False)
