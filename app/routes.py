@@ -21,6 +21,46 @@ def parse_time(v):
 def aware(value):
     if not value:return None
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+def gps_distance_km(a,b):
+    import math
+    lat1,lon1,lat2,lon2=map(math.radians,(a.latitude,a.longitude,b.latitude,b.longitude))
+    value=math.sin((lat2-lat1)/2)**2+math.cos(lat1)*math.cos(lat2)*math.sin((lon2-lon1)/2)**2
+    return 2*6371.0088*math.asin(math.sqrt(value))
+
+def gps_point_reason(previous,point):
+    sequence=str(point.sequence or '')
+    if sequence.startswith('REJECTED:'):return sequence.split(':',2)[1]
+    accuracy=float(point.accuracy_m or 0)
+    if accuracy>150:return 'POOR_ACCURACY'
+    if previous is None:return None
+    elapsed=(aware(point.sampled_at)-aware(previous.sampled_at)).total_seconds()
+    if elapsed<=0:return 'OUT_OF_ORDER'
+    distance=gps_distance_km(previous,point)
+    calculated_speed=distance/(elapsed/3600)
+    reported_speed=float(point.speed_kmh or 0)
+    if distance>0.5 and elapsed<30 and calculated_speed>180:return 'IMPOSSIBLE_JUMP'
+    if distance>0.25 and reported_speed<3 and elapsed<120:return 'STATIONARY_JUMP'
+    if calculated_speed>240:return 'IMPLAUSIBLE_SPEED'
+    return None
+
+def classify_gps_points(points):
+    accepted=[];rejected=[];previous=None
+    for point in points:
+        reason=gps_point_reason(previous,point)
+        if reason:rejected.append((point,reason))
+        else:accepted.append(point);previous=point
+    return accepted,rejected
+
+def journey_groups(points,gap_minutes=20):
+    groups=[];current=[];previous=None
+    for point in points:
+        if previous and (aware(point.sampled_at)-aware(previous.sampled_at))>timedelta(minutes=gap_minutes):
+            if current:groups.append(current)
+            current=[]
+        current.append(point);previous=point
+    if current:groups.append(current)
+    return groups
+
 def route_distance_km(points):
     import math
     total=0.0;previous=None
@@ -285,7 +325,10 @@ def asset_view(asset_id):
         latest=latest_reading(signal.id);history=Reading.query.filter_by(signal_id=signal.id).order_by(desc(Reading.sampled_at)).limit(48).all()[::-1];lookup[signal.key]=latest;cards.append({'signal':signal,'latest':latest,'history':history})
         if history:series.append({'key':signal.key,'label':signal.label,'unit':signal.unit or '','values':[{'time':aware(r.sampled_at).strftime('%H:%M'),'value':r.value} for r in history]})
     alarms=Alarm.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).order_by(desc(Alarm.opened_at)).limit(30).all();open_alarms=[a for a in alarms if a.state in ('OPEN','ACKNOWLEDGED')]
-    device=Device.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,active=True).first();location=Location.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).order_by(desc(Location.sampled_at)).first();route=Location.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).order_by(desc(Location.sampled_at)).limit(200).all()[::-1]
+    device=Device.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,active=True).first()
+    raw_route=Location.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).order_by(desc(Location.sampled_at)).limit(500).all()[::-1]
+    route,rejected_route=classify_gps_points(raw_route)
+    location=route[-1] if route else None
     phone_battery=None
     battery_signal=SignalDefinition.query.filter_by(asset_id=asset.id,key='battery_percent',enabled=True).first()
     if battery_signal:
@@ -508,7 +551,11 @@ def mobile_tracker_location():
     if not(-90<=lat<=90 and -180<=lon<=180) or speed>300:return jsonify(error='location_out_of_range'),400
     if speed<3:speed=0.0
     sampled=parse_time(data.get('timestamp'))
-    db.session.add(Location(customer_id=device.customer_id,asset_id=device.asset_id,sampled_at=sampled,latitude=lat,longitude=lon,speed_kmh=speed,accuracy_m=acc,heading=data.get('heading'),sequence=sequence))
+    point=Location(customer_id=device.customer_id,asset_id=device.asset_id,sampled_at=sampled,latitude=lat,longitude=lon,speed_kmh=speed,accuracy_m=acc,heading=data.get('heading'),sequence=sequence)
+    previous=Location.query.filter(Location.customer_id==device.customer_id,Location.asset_id==device.asset_id,~Location.sequence.like('REJECTED:%'),Location.sampled_at<=sampled).order_by(desc(Location.sampled_at)).first()
+    rejection_reason=gps_point_reason(previous,point)
+    if rejection_reason:point.sequence=f'REJECTED:{rejection_reason}:{sequence}'
+    db.session.add(point)
     battery=data.get('battery_percent')
     if battery is not None:
         sig=SignalDefinition.query.filter_by(asset_id=device.asset_id,key='battery_percent').first()
@@ -521,14 +568,17 @@ def mobile_tracker_location():
     capabilities.extend(['GPS','PHONE_BATTERY',f'CHARGING:{str(bool(charging)).lower()}'])
     device.capabilities=list(dict.fromkeys(capabilities))
     evaluate_mobile(device,data)
-    device.last_seen=utcnow();device.asset.last_seen=sampled;device.firmware=str(data.get('client_version') or 'mobile-web-1.2')[:40]
-    db.session.commit();return jsonify(status='accepted',sequence=sequence),202
+    device.last_seen=utcnow()
+    if not rejection_reason:device.asset.last_seen=sampled
+    device.firmware=str(data.get('client_version') or 'mobile-web-1.2')[:40]
+    db.session.commit()
+    return jsonify(status='rejected_from_route' if rejection_reason else 'accepted',sequence=sequence,route_accepted=not bool(rejection_reason),reason=rejection_reason),202
 
 @bp.get('/api/v1/mobile/status')
 def mobile_tracker_status():
     device=mobile_tracker_device()
     if not device:return jsonify(error='invalid_mobile_tracker_token'),401
-    latest=Location.query.filter_by(customer_id=device.customer_id,asset_id=device.asset_id).order_by(desc(Location.sampled_at)).first()
+    latest=Location.query.filter(Location.customer_id==device.customer_id,Location.asset_id==device.asset_id,~Location.sequence.like('REJECTED:%')).order_by(desc(Location.sampled_at)).first()
     return jsonify(status='ok',device_uid=device.device_uid,asset_name=device.asset.name,last_contact=device.last_seen.isoformat() if device.last_seen else None,last_position={'latitude':latest.latitude,'longitude':latest.longitude,'sampled_at':latest.sampled_at.isoformat(),'accuracy_m':latest.accuracy_m} if latest else None)
 
 @bp.post('/api/v1/mobile/event')
@@ -592,6 +642,34 @@ def alert_settings(asset_id):
         for key in ('battery','offline','gps','speed','extended_stop'):setattr(cfg,key+'_enabled',request.form.get(key+'_enabled')=='on')
         cfg.updated_by=current_user.id;audit(asset.customer_id,'ALERT_SETTINGS_CHANGED',asset.id,None,'USER',current_user.id,'Vehicle alert settings updated');db.session.commit();flash('Alert settings saved.','ok');return redirect(url_for('main.alert_settings',asset_id=asset.id))
     return render_template('alert_settings.html',asset=asset,cfg=cfg)
+
+@bp.get('/asset/<int:asset_id>/tracking')
+@login_required
+def tracking_history(asset_id):
+    asset=Asset.query.filter_by(id=asset_id,customer_id=tenant_id()).first_or_404();now=utcnow()
+    preset=request.args.get('range','24h');end=parse_time(request.args.get('to')) if request.args.get('to') else now
+    if request.args.get('from'):start=parse_time(request.args.get('from'))
+    elif preset=='today':start=now.replace(hour=0,minute=0,second=0,microsecond=0)
+    elif preset=='7d':start=now-timedelta(days=7)
+    else:start=now-timedelta(hours=24)
+    raw=Location.query.filter(Location.customer_id==tenant_id(),Location.asset_id==asset.id,Location.sampled_at>=start,Location.sampled_at<=end).order_by(Location.sampled_at).limit(10000).all()
+    accepted,rejected=classify_gps_points(raw);groups=journey_groups(accepted)
+    stops=[];moving=stopped=0;maximum=0.0;previous=None;stop_start=None
+    for point in accepted:
+        speed=float(point.speed_kmh or 0);maximum=max(maximum,speed)
+        if previous:
+            seconds=max(0,(aware(point.sampled_at)-aware(previous.sampled_at)).total_seconds())
+            if seconds<=1800:
+                if speed>=3:moving+=seconds
+                else:stopped+=seconds
+        if speed<3 and stop_start is None:stop_start=aware(point.sampled_at)
+        elif speed>=3 and stop_start:
+            duration=(aware(point.sampled_at)-stop_start).total_seconds()
+            if duration>=300:stops.append({'duration_minutes':round(duration/60),'started':stop_start.strftime('%d %b %H:%M'),'latitude':previous.latitude,'longitude':previous.longitude})
+            stop_start=None
+        previous=point
+    analysis={'distance_km':route_distance_km(accepted),'max_speed':round(maximum),'moving_minutes':round(moving/60),'stopped_minutes':round(stopped/60),'gap_count':max(0,len(groups)-1),'points':[{'latitude':p.latitude,'longitude':p.longitude,'timestamp':aware(p.sampled_at).isoformat(),'speed':float(p.speed_kmh or 0),'accuracy':float(p.accuracy_m or 0)} for p in accepted],'rejected':[{'latitude':p.latitude,'longitude':p.longitude,'timestamp':aware(p.sampled_at).isoformat(),'reason':reason,'accuracy':float(p.accuracy_m or 0)} for p,reason in rejected],'last':{'latitude':accepted[-1].latitude,'longitude':accepted[-1].longitude,'timestamp':aware(accepted[-1].sampled_at).strftime('%Y-%m-%d %H:%M UTC')} if accepted else None,'stops':stops[-20:],'journeys':[{'number':i+1,'started':aware(g[0].sampled_at).strftime('%d %b %H:%M'),'ended':aware(g[-1].sampled_at).strftime('%d %b %H:%M'),'points':len(g),'distance_km':route_distance_km(g)} for i,g in enumerate(groups)]}
+    return render_template('tracking_history.html',asset=asset,start=start,end=end,analysis=analysis,preset=preset)
 
 @bp.get('/devices')
 @login_required
