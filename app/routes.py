@@ -9,6 +9,7 @@ from .payfast import config as payfast_config,build_checkout,event_hash,valid_si
 from .models import Customer,User,Site,Asset,Device,SignalDefinition,Reading,Alarm,Location,WorkspaceProfile,SubscriptionPlan,Subscription,PaymentRecord,PayFastEvent,SubscriptionAuditEvent,IntegrationConnector,IntegrationSignalMapping,IntegrationEvent,ConnectorEndpointConfig,UniversalSourceMapping,WebhookReceipt,EdgeGateway,IntegrationJobEvent,MqttSubscription,MqttTopicMapping,MqttMessageEvent,MobileTrackerRegistration,MobileConsent,SecurityAuditEvent,AssetAlertSettings,CoreAlarmState,DataDeletionRequest,FleetFeatureDefaults,AssetFeatureOverride
 from .route_intelligence import match_route, reverse_geocode, route_quality
 from .security_privacy import POLICY_VERSION,audit,consent_for_device,settings_for,evaluate_mobile,FEATURE_KEYS,MANDATORY_CONTROLS,fleet_defaults_for,entitlement_map,effective_features
+from .seo import SEO_PAGES, render_seo_page
 bp=Blueprint('main',__name__)
 
 def utcnow(): return datetime.now(timezone.utc)
@@ -88,7 +89,7 @@ def evaluate_alarm(sig,value):
     elif severity and existing: existing.severity=severity;existing.message=msg;existing.value=value
     elif existing: existing.state='CLOSED';existing.note=(existing.note or '')+' Auto-closed after return to normal.'
 
-ALLOWED_BILLING_ENDPOINTS={'main.public_home','main.login','main.logout','main.register','main.health','main.billing','main.plans','main.select_plan','main.billing_checkout','main.billing_success','main.billing_cancel','main.payfast_notify','main.subscription_required','static'}
+ALLOWED_BILLING_ENDPOINTS={'main.public_home','main.seo_public_page','main.login','main.logout','main.register','main.health','main.billing','main.plans','main.select_plan','main.billing_checkout','main.billing_success','main.billing_cancel','main.payfast_notify','main.subscription_required','static'}
 
 def set_subscription_state(sub,new_state,reason):
     if sub.state!=new_state:
@@ -114,6 +115,18 @@ def enforce_subscription_access():
     allowed,sub=entitlement_for(current_user.customer_id)
     if not allowed:return redirect(url_for('main.subscription_required'))
 
+@bp.get('/fleet-tracking-south-africa')
+@bp.get('/mobile-phone-tracking')
+@bp.get('/vehicle-gps-tracking')
+@bp.get('/asset-monitoring')
+@bp.get('/industrial-sensor-monitoring')
+@bp.get('/fleet-tracking-api')
+@bp.get('/security-privacy')
+def seo_public_page():
+    slug=request.path.strip('/')
+    rendered=render_seo_page(slug)
+    return rendered if rendered is not None else abort(404)
+
 @bp.get("/health")
 def health():
     return {"status": "ok", "service": "assettrack360-rev17"}
@@ -134,50 +147,27 @@ def google_site_verification():
 
 @bp.get("/robots.txt")
 def robots_txt():
-    body = (
+    body=(
         "User-agent: *\n"
         "Allow: /\n"
-        "Disallow: /dashboard\n"
-        "Disallow: /asset/\n"
-        "Disallow: /devices\n"
-        "Disallow: /account\n"
-        "Disallow: /billing\n"
-        "Disallow: /integrations\n"
-        "Disallow: /edge-gateways\n"
-        "Disallow: /api/\n"
-        "Disallow: /onboarding\n\n"
+        "Disallow: /dashboard\nDisallow: /asset/\nDisallow: /devices\n"
+        "Disallow: /account\nDisallow: /billing\nDisallow: /integrations\n"
+        "Disallow: /edge-gateways\nDisallow: /api/\nDisallow: /onboarding\n"
+        "Disallow: /admin/\nDisallow: /mobile-tracker\n\n"
         "Sitemap: https://fleettrack.wykiesautomation.co.za/sitemap.xml\n"
     )
-    return body, 200, {"Content-Type": "text/plain; charset=utf-8"}
-
-
+    return body,200,{"Content-Type":"text/plain; charset=utf-8"}
 @bp.get("/sitemap.xml")
 def sitemap_xml():
-    base_url = "https://fleettrack.wykiesautomation.co.za"
-    last_modified = datetime.now(timezone.utc).date().isoformat()
-    pages = (
-        ("/", "daily", "1.0"),
-        ("/register", "weekly", "0.9"),
-        ("/login", "monthly", "0.5"),
-        ("/plans", "weekly", "0.8"),
-    )
-    entries = []
-    for path, change_frequency, priority in pages:
-        entries.append(
-            "  <url>\n"
-            f"    <loc>{base_url}{path}</loc>\n"
-            f"    <lastmod>{last_modified}</lastmod>\n"
-            f"    <changefreq>{change_frequency}</changefreq>\n"
-            f"    <priority>{priority}</priority>\n"
-            "  </url>"
-        )
-    xml = '<?xml version="1.0" encoding="UTF-8"?>\n'
-    xml += '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
-    xml += "\n".join(entries)
-    xml += "\n</urlset>\n"
-    return xml, 200, {"Content-Type": "application/xml; charset=utf-8"}
-
-
+    base_url="https://fleettrack.wykiesautomation.co.za"
+    last_modified=utcnow().date().isoformat()
+    pages=[("/","daily","1.0"),("/register","weekly","0.8"),("/plans","weekly","0.8")]
+    pages.extend((page["path"],"weekly","0.9") for page in SEO_PAGES.values())
+    entries=[]
+    for path,change_frequency,priority in pages:
+        entries.append("  <url>\n"+f"    <loc>{base_url}{path}</loc>\n"+f"    <lastmod>{last_modified}</lastmod>\n"+f"    <changefreq>{change_frequency}</changefreq>\n"+f"    <priority>{priority}</priority>\n"+"  </url>")
+    xml='<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'+"\n".join(entries)+"\n</urlset>\n"
+    return xml,200,{"Content-Type":"application/xml; charset=utf-8"}
 @bp.get("/site.webmanifest")
 def site_webmanifest():
     return jsonify(
