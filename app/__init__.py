@@ -45,6 +45,8 @@ def initialise_schema_safely(app):
                 db.create_all()
                 from .payment_entitlement_migration import ensure_payment_entitlement_schema
                 ensure_payment_entitlement_schema(db)
+                ensure_email_verification_schema(app)
+                db.create_all()
                 return
             except OperationalError as error:
                 db.session.rollback()
@@ -54,6 +56,26 @@ def initialise_schema_safely(app):
                     raise
                 time.sleep(attempt+1)
 
+
+def ensure_email_verification_schema(app):
+    """Add verification fields safely for existing production databases."""
+    inspector=db.inspect(db.engine)
+    columns={column["name"] for column in inspector.get_columns("user")}
+    statements=[]
+    dialect=db.engine.dialect.name
+    boolean_type="BOOLEAN" if dialect=="postgresql" else "BOOLEAN"
+    if "email_verified" not in columns:
+        statements.append(f'ALTER TABLE "user" ADD COLUMN email_verified {boolean_type} NOT NULL DEFAULT TRUE')
+    if "email_verified_at" not in columns:
+        statements.append('ALTER TABLE "user" ADD COLUMN email_verified_at TIMESTAMP')
+    if "verification_nonce" not in columns:
+        statements.append('ALTER TABLE "user" ADD COLUMN verification_nonce VARCHAR(80)')
+    if "verification_sent_at" not in columns:
+        statements.append('ALTER TABLE "user" ADD COLUMN verification_sent_at TIMESTAMP')
+    with db.engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
+        connection.execute(text('UPDATE "user" SET email_verified = TRUE WHERE email_verified IS NULL'))
 
 def create_app(test_config=None):
     app = Flask(__name__)
@@ -88,6 +110,8 @@ def create_app(test_config=None):
         SESSION_COOKIE_SECURE=os.getenv("COOKIE_SECURE", "false").lower() == "true",
         PERMANENT_SESSION_LIFETIME=timedelta(hours=12),
         MAX_CONTENT_LENGTH=1024 * 1024,
+        SERVER_NAME=os.getenv("SERVER_NAME") or None,
+        PREFERRED_URL_SCHEME="https",
     )
     if test_config:
         app.config.update(test_config)
@@ -150,6 +174,8 @@ def create_app(test_config=None):
                     role="platform_admin",
                     password_hash=generate_password_hash(password),
                     active=True,
+                    email_verified=True,
+                    email_verified_at=datetime.now(timezone.utc),
                 )
             )
             db.session.commit()

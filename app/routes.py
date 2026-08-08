@@ -5,8 +5,10 @@ from flask_login import login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import desc
 from . import db
+from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
+from .email_service import send_verification_email
 from .payfast import config as payfast_config,build_checkout,event_hash,valid_signature,valid_source,server_validate,forwarded_ip
-from .models import Customer,User,Site,Asset,Device,SignalDefinition,Reading,Alarm,Location,WorkspaceProfile,SubscriptionPlan,Subscription,PaymentRecord,PayFastEvent,SubscriptionAuditEvent,IntegrationConnector,IntegrationSignalMapping,IntegrationEvent,ConnectorEndpointConfig,UniversalSourceMapping,WebhookReceipt,EdgeGateway,IntegrationJobEvent,MqttSubscription,MqttTopicMapping,MqttMessageEvent,MobileTrackerRegistration,MobileConsent,SecurityAuditEvent,AssetAlertSettings,CoreAlarmState,DataDeletionRequest,FleetFeatureDefaults,AssetFeatureOverride
+from .models import Customer,User,Site,Asset,Device,SignalDefinition,Reading,Alarm,Location,WorkspaceProfile,SubscriptionPlan,Subscription,PaymentRecord,PayFastEvent,SubscriptionAuditEvent,IntegrationConnector,IntegrationSignalMapping,IntegrationEvent,ConnectorEndpointConfig,UniversalSourceMapping,WebhookReceipt,EdgeGateway,IntegrationJobEvent,MqttSubscription,MqttTopicMapping,MqttMessageEvent,MobileTrackerRegistration,MobileConsent,SecurityAuditEvent,AssetAlertSettings,CoreAlarmState,DataDeletionRequest,FleetFeatureDefaults,AssetFeatureOverride,RegistrationAttempt
 from .route_intelligence import match_route, reverse_geocode, route_quality
 from .security_privacy import POLICY_VERSION,audit,consent_for_device,settings_for,evaluate_mobile,FEATURE_KEYS,MANDATORY_CONTROLS,fleet_defaults_for,entitlement_map,effective_features
 from .seo import SEO_PAGES, render_seo_page
@@ -189,26 +191,96 @@ def site_webmanifest():
     )
 
 
+def _client_ip():
+    forwarded=request.headers.get('CF-Connecting-IP') or request.headers.get('X-Forwarded-For','').split(',')[0].strip()
+    return forwarded or request.remote_addr or 'unknown'
+
+def _privacy_hash(value):
+    pepper=current_app.config['SECRET_KEY']
+    return hashlib.sha256(f'{pepper}:{value}'.encode('utf-8')).hexdigest()
+
+def _record_attempt(email,action,accepted=False):
+    db.session.add(RegistrationAttempt(email_hash=_privacy_hash(email),ip_hash=_privacy_hash(_client_ip()),action=action,accepted=accepted))
+
+def _attempt_count(email,action,minutes,by_ip=False):
+    cutoff=utcnow()-timedelta(minutes=minutes)
+    query=RegistrationAttempt.query.filter(RegistrationAttempt.action==action,RegistrationAttempt.created_at>=cutoff)
+    key=_privacy_hash(_client_ip()) if by_ip else _privacy_hash(email)
+    return query.filter(RegistrationAttempt.ip_hash==key if by_ip else RegistrationAttempt.email_hash==key).count()
+
+def _verification_serializer():
+    return URLSafeTimedSerializer(current_app.config['SECRET_KEY'],salt='assettrack360-email-verification-v1')
+
+def _verification_url(user):
+    token=_verification_serializer().dumps({'uid':user.id,'email':user.email,'nonce':user.verification_nonce})
+    base=os.getenv('PUBLIC_BASE_URL','https://assettrack360.wykiesautomation.co.za').rstrip('/')
+    return f'{base}{url_for("main.verify_email",token=token)}'
+
+def _send_user_verification(user):
+    user.verification_nonce=secrets.token_urlsafe(24)
+    user.verification_sent_at=utcnow()
+    db.session.commit()
+    return send_verification_email(user.email,user.name,_verification_url(user))
+
 @bp.route('/register',methods=['GET','POST'])
 def register():
     if current_user.is_authenticated:return redirect(url_for('main.dashboard'))
     if request.method=='POST':
-        company=request.form.get('company','').strip(); name=request.form.get('name','').strip(); email=request.form.get('email','').strip().lower(); password=request.form.get('password','')
-        if len(company)<2 or len(name)<2 or '@' not in email or len(password)<10: flash('Complete all fields. Password must be at least 10 characters.','error')
-        elif User.query.filter_by(email=email).first(): flash('Email already registered.','error')
+        company=request.form.get('company','').strip();name=request.form.get('name','').strip();email=request.form.get('email','').strip().lower();password=request.form.get('password','');honeypot=request.form.get('website','').strip()
+        generic='If the address can be registered, a verification email will be sent.'
+        if honeypot:
+            _record_attempt(email or 'empty','REGISTER',False);db.session.commit();flash(generic,'ok');return redirect(url_for('main.login'))
+        if _attempt_count(email,'REGISTER',60,True)>=5 or _attempt_count(email,'REGISTER',60,False)>=3:
+            _record_attempt(email or 'empty','REGISTER',False);db.session.commit();flash('Too many registration attempts. Please wait before trying again.','error');return render_template('auth.html',mode='register')
+        if len(company)<2 or len(name)<2 or '@' not in email or len(password)<10:
+            _record_attempt(email or 'empty','REGISTER',False);db.session.commit();flash('Complete all fields. Password must be at least 10 characters.','error')
+        elif User.query.filter_by(email=email).first():
+            _record_attempt(email,'REGISTER',False);db.session.commit();flash(generic,'ok');return redirect(url_for('main.login'))
         else:
-            base=slugify(company) or 'customer'; slug=base; n=1
+            base=slugify(company) or 'customer';slug=base;n=1
             while Customer.query.filter_by(slug=slug).first():n+=1;slug=f'{base}-{n}'
-            c=Customer(name=company,slug=slug);db.session.add(c);db.session.flush();u=User(customer_id=c.id,email=email,name=name,role='customer_admin',password_hash=generate_password_hash(password));db.session.add(u);db.session.commit();login_user(u);return redirect(url_for('main.onboarding'))
+            c=Customer(name=company,slug=slug,active=False);db.session.add(c);db.session.flush()
+            u=User(customer_id=c.id,email=email,name=name,role='customer_admin',password_hash=generate_password_hash(password),active=True,email_verified=False)
+            db.session.add(u);_record_attempt(email,'REGISTER',True);db.session.commit()
+            sent=_send_user_verification(u)
+            flash(generic if sent else 'Account created, but verification email delivery is temporarily unavailable. Use Resend Verification shortly.','ok' if sent else 'error')
+            return redirect(url_for('main.login'))
     return render_template('auth.html',mode='register')
+
+@bp.get('/verify-email/<token>')
+def verify_email(token):
+    try:data=_verification_serializer().loads(token,max_age=1800)
+    except SignatureExpired:flash('Verification link expired. Request a new email.','error');return redirect(url_for('main.login'))
+    except BadSignature:flash('Invalid verification link.','error');return redirect(url_for('main.login'))
+    user=db.session.get(User,int(data.get('uid',0)))
+    if not user or user.email!=data.get('email') or not user.verification_nonce or user.verification_nonce!=data.get('nonce'):
+        flash('This verification link is invalid or has already been used.','error');return redirect(url_for('main.login'))
+    user.email_verified=True;user.email_verified_at=utcnow();user.verification_nonce=None;user.customer.active=True
+    db.session.commit();flash('Email verified. Your AssetTrack 360 account is now active.','ok');return redirect(url_for('main.login'))
+
+@bp.post('/resend-verification')
+def resend_verification():
+    email=request.form.get('email','').strip().lower();generic='If an unverified account exists, a new verification email will be sent.'
+    if _attempt_count(email,'RESEND',60,True)>=5 or _attempt_count(email,'RESEND',60,False)>=3:
+        flash('Too many resend requests. Please wait before trying again.','error');return redirect(url_for('main.login'))
+    user=User.query.filter_by(email=email).first();_record_attempt(email or 'empty','RESEND',bool(user and not user.email_verified));db.session.commit()
+    if user and not user.email_verified:_send_user_verification(user)
+    flash(generic,'ok');return redirect(url_for('main.login'))
 
 @bp.route('/login',methods=['GET','POST'])
 def login():
     if request.method=='POST':
-        u=User.query.filter_by(email=request.form.get('email','').strip().lower()).first()
-        if u and u.active and check_password_hash(u.password_hash,request.form.get('password','')):login_user(u);return redirect(url_for('main.dashboard'))
+        email=request.form.get('email','').strip().lower();u=User.query.filter_by(email=email).first()
+        if _attempt_count(email,'LOGIN',15,True)>=12:
+            flash('Too many login attempts. Please wait 15 minutes.','error');return render_template('auth.html',mode='login')
+        valid=bool(u and u.active and check_password_hash(u.password_hash,request.form.get('password','')))
+        _record_attempt(email or 'empty','LOGIN',valid);db.session.commit()
+        if valid and not u.email_verified:
+            flash('Your email address has not been verified. Request a new verification email below.','error');return render_template('auth.html',mode='login',pending_email=email)
+        if valid:login_user(u);return redirect(url_for('main.dashboard'))
         flash('Invalid login.','error')
     return render_template('auth.html',mode='login')
+
 @bp.get('/logout')
 @login_required
 def logout():logout_user();return redirect(url_for('main.login'))

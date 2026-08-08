@@ -14,6 +14,10 @@ class User(UserMixin,db.Model):
     email=db.Column(db.String(180),nullable=False,unique=True,index=True); name=db.Column(db.String(120),nullable=False)
     role=db.Column(db.String(30),default='customer_admin',nullable=False); password_hash=db.Column(db.String(255),nullable=False)
     active=db.Column(db.Boolean,default=True,nullable=False); created_at=db.Column(db.DateTime(timezone=True),default=now,nullable=False)
+    email_verified=db.Column(db.Boolean,default=False,nullable=False,index=True)
+    email_verified_at=db.Column(db.DateTime(timezone=True))
+    verification_nonce=db.Column(db.String(80),index=True)
+    verification_sent_at=db.Column(db.DateTime(timezone=True))
     customer=db.relationship('Customer')
     @property
     def is_active(self): return self.active
@@ -286,3 +290,11 @@ class FleetFeatureDefaults(db.Model):
 class AssetFeatureOverride(db.Model):
     id=db.Column(db.Integer,primary_key=True);customer_id=db.Column(db.Integer,nullable=False,index=True);asset_id=db.Column(db.Integer,nullable=False,unique=True,index=True);use_fleet_defaults=db.Column(db.Boolean,default=True,nullable=False)
     features_json=db.Column(db.JSON,default=dict,nullable=False);updated_at=db.Column(db.DateTime(timezone=True),default=now,onupdate=now,nullable=False);updated_by=db.Column(db.Integer)
+
+class RegistrationAttempt(db.Model):
+    id=db.Column(db.BigInteger,primary_key=True)
+    email_hash=db.Column(db.String(64),nullable=False,index=True)
+    ip_hash=db.Column(db.String(64),nullable=False,index=True)
+    action=db.Column(db.String(30),nullable=False,index=True)
+    accepted=db.Column(db.Boolean,default=False,nullable=False)
+    created_at=db.Column(db.DateTime(timezone=True),default=now,nullable=False,index=True)
