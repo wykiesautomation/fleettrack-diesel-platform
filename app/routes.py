@@ -121,6 +121,7 @@ def entitlement_for(customer_id):
 @bp.before_app_request
 def enforce_subscription_access():
     if not current_user.is_authenticated:return None
+    if current_user.role=='platform_admin':return None
     if request.endpoint in ALLOWED_BILLING_ENDPOINTS or request.endpoint is None:return None
     allowed,sub=entitlement_for(current_user.customer_id)
     if not allowed:return redirect(url_for('main.subscription_required'))
@@ -287,7 +288,9 @@ def login():
         _record_attempt(email or 'empty','LOGIN',valid);db.session.commit()
         if valid and not u.email_verified:
             flash('Your email address has not been verified. Request a new verification email below.','error');return render_template('auth.html',mode='login',pending_email=email)
-        if valid:login_user(u);return redirect(url_for('main.dashboard'))
+        if valid:
+            login_user(u)
+            return redirect(url_for('admin.dashboard') if u.role=='platform_admin' else url_for('main.dashboard'))
         flash('Invalid login.','error')
     return render_template('auth.html',mode='login')
 

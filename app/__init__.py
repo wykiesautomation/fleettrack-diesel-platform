@@ -151,6 +151,8 @@ def create_app(test_config=None):
     app.register_blueprint(bp)
     from .edge_gateway_registry import edge_bp
     app.register_blueprint(edge_bp)
+    from .admin import admin_bp
+    app.register_blueprint(admin_bp)
 
     with app.app_context():
         from . import edge_models  # Registers REV20A tables before create_all.
@@ -200,6 +202,8 @@ def create_app(test_config=None):
         db.session.commit()
 
         for customer in Customer.query.filter_by(active=True).all():
+            if customer.slug == 'platform-admin':
+                continue
             if not WorkspaceProfile.query.filter_by(customer_id=customer.id).first():
                 db.session.add(WorkspaceProfile(customer_id=customer.id))
             if not Subscription.query.filter_by(customer_id=customer.id).first():
