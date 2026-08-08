@@ -199,7 +199,7 @@ def create_app(test_config=None):
                 )
         db.session.commit()
 
-        for customer in Customer.query.all():
+        for customer in Customer.query.filter_by(active=True).all():
             if not WorkspaceProfile.query.filter_by(customer_id=customer.id).first():
                 db.session.add(WorkspaceProfile(customer_id=customer.id))
             if not Subscription.query.filter_by(customer_id=customer.id).first():
@@ -226,3 +226,6 @@ def create_app(test_config=None):
         )
 
     return app
+
+# WSGI entry point used by Render: gunicorn app:app
+app = create_app()
