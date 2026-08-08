@@ -1,7 +1,7 @@
 from functools import wraps
 from datetime import datetime, timezone, timedelta
 import secrets
-from flask import Blueprint, abort, flash, redirect, render_template, request, url_for
+from flask import Blueprint, abort, flash, redirect, render_template, request, url_for, Response
 from flask_login import current_user, login_required
 from sqlalchemy import desc, or_
 from werkzeug.security import generate_password_hash
@@ -119,3 +119,66 @@ def delete_customer(customer_id):
    if hasattr(model,'customer_id'):model.query.filter_by(customer_id=cid).delete(synchronize_session=False)
   IntegrationConnector.query.filter_by(customer_id=cid).delete(synchronize_session=False);name=c.name;db.session.delete(c);db.session.commit();flash(name+' deleted.','ok');return redirect(url_for('admin.customers'))
  except Exception as exc:db.session.rollback();flash('Delete blocked safely: '+type(exc).__name__+'. No partial deletion committed.','error');return redirect(url_for('admin.customer_detail',customer_id=cid))
+
+
+@admin_bp.get('/search')
+@owner_only
+def global_search():
+ q=request.args.get('q','').strip();results={'customers':[],'users':[],'devices':[],'payments':[]}
+ if q:
+  pat=f'%{q}%'
+  results['customers']=Customer.query.filter(Customer.slug!='platform-admin',or_(Customer.name.ilike(pat),Customer.slug.ilike(pat))).limit(30).all()
+  results['users']=User.query.join(Customer,User.customer_id==Customer.id).filter(Customer.slug!='platform-admin',or_(User.email.ilike(pat),User.name.ilike(pat))).limit(30).all()
+  results['devices']=Device.query.filter(or_(Device.device_uid.ilike(pat),Device.device_type.ilike(pat),Device.firmware.ilike(pat))).limit(30).all()
+  results['payments']=PaymentRecord.query.filter(or_(PaymentRecord.merchant_payment_id.ilike(pat),PaymentRecord.provider_reference.ilike(pat),PaymentRecord.invoice_number.ilike(pat))).limit(30).all()
+ return render_template('platform_admin_search.html',q=q,results=results,cname=cname,next_invoice=next_invoice)
+
+@admin_bp.get('/payments/<int:payment_id>')
+@owner_only
+def payment_detail(payment_id):
+ payment=PaymentRecord.query.get_or_404(payment_id)
+ customer=db.session.get(Customer,payment.customer_id)
+ subscription=Subscription.query.filter_by(customer_id=payment.customer_id).first()
+ events=PayFastEvent.query.filter_by(merchant_payment_id=payment.merchant_payment_id).order_by(desc(PayFastEvent.created_at)).all()
+ return render_template('platform_admin_payment_detail.html',payment=payment,customer=customer,subscription=subscription,events=events,next_invoice=next_invoice)
+
+@admin_bp.post('/payments/<int:payment_id>/note')
+@owner_only
+def payment_note(payment_id):
+ payment=PaymentRecord.query.get_or_404(payment_id)
+ payment.admin_note=request.form.get('admin_note','').strip()[:500]
+ log('PAYMENT_ADMIN_NOTE',payment.customer_id,next_invoice(payment));db.session.commit();flash('Payment note saved.','ok')
+ return redirect(url_for('admin.payment_detail',payment_id=payment.id))
+
+@admin_bp.get('/invoices/<int:payment_id>')
+@owner_only
+def invoice_detail(payment_id):
+ payment=PaymentRecord.query.get_or_404(payment_id);customer=db.session.get(Customer,payment.customer_id);profile=WorkspaceProfile.query.filter_by(customer_id=payment.customer_id).first()
+ return render_template('platform_admin_invoice_detail.html',payment=payment,customer=customer,profile=profile,next_invoice=next_invoice)
+
+@admin_bp.get('/invoices/<int:payment_id>/print')
+@owner_only
+def invoice_print(payment_id):
+ payment=PaymentRecord.query.get_or_404(payment_id);customer=db.session.get(Customer,payment.customer_id);profile=WorkspaceProfile.query.filter_by(customer_id=payment.customer_id).first()
+ html=render_template('platform_admin_invoice_print.html',payment=payment,customer=customer,profile=profile,next_invoice=next_invoice)
+ return Response(html,200,{'Content-Type':'text/html; charset=utf-8','Content-Disposition':f'inline; filename={next_invoice(payment)}.html'})
+
+@admin_bp.post('/support/<int:request_id>/update')
+@owner_only
+def support_update(request_id):
+ item=DataDeletionRequest.query.get_or_404(request_id);state=request.form.get('state','').upper();allowed={'REQUESTED','IN_REVIEW','APPROVED','REJECTED','COMPLETED'}
+ if state not in allowed:abort(400)
+ item.state=state;item.note=request.form.get('note','').strip()[:500];item.reviewed_at=utcnow();item.reviewed_by=current_user.id
+ log('SUPPORT_REQUEST_UPDATED',item.customer_id,f'{item.id}: {state}');db.session.commit();flash('Support request updated.','ok')
+ return redirect(url_for('admin.support'))
+
+@admin_bp.get('/notifications')
+@owner_only
+def notifications():
+ rows=[]
+ for sub in Subscription.query.join(Customer,Subscription.customer_id==Customer.id).filter(Customer.slug!='platform-admin',Subscription.state.in_(['PAYMENT_REQUIRED','GRACE_PERIOD','SUSPENDED'])).order_by(desc(Subscription.updated_at)).limit(50):
+  rows.append({'type':'BILLING','title':sub.customer.name,'detail':sub.state.replace('_',' '),'created_at':sub.updated_at,'url':url_for('admin.customer_detail',customer_id=sub.customer_id)})
+ for req in DataDeletionRequest.query.filter(DataDeletionRequest.state.in_(['REQUESTED','IN_REVIEW'])).order_by(desc(DataDeletionRequest.requested_at)).limit(50):
+  rows.append({'type':'SUPPORT','title':cname(req.customer_id),'detail':req.request_type+' · '+req.state,'created_at':req.requested_at,'url':url_for('admin.support')})
+ rows.sort(key=lambda x: aware(x['created_at']) or utcnow(),reverse=True)
+ return render_template('platform_admin_notifications.html',rows=rows)
