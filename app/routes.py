@@ -256,6 +256,16 @@ def verify_email(token):
     if not user or user.email!=data.get('email') or not user.verification_nonce or user.verification_nonce!=data.get('nonce'):
         flash('This verification link is invalid or has already been used.','error');return redirect(url_for('main.login'))
     user.email_verified=True;user.email_verified_at=utcnow();user.verification_nonce=None;user.customer.active=True
+    if not WorkspaceProfile.query.filter_by(customer_id=user.customer_id).first():
+        db.session.add(WorkspaceProfile(customer_id=user.customer_id,contact_email=user.email,billing_email=user.email))
+    if not Subscription.query.filter_by(customer_id=user.customer_id).first():
+        plan=SubscriptionPlan.query.filter_by(code='monitor',active=True).first()
+        if not plan:
+            plan=SubscriptionPlan.query.filter_by(active=True).order_by(SubscriptionPlan.monthly_price).first()
+        if not plan:
+            db.session.rollback();flash('Account verified, but no subscription plan is available. Contact support.','error');return redirect(url_for('main.login'))
+        started=utcnow()
+        db.session.add(Subscription(customer_id=user.customer_id,plan_id=plan.id,state='TRIAL',trial_started_at=started,trial_ends_at=started+timedelta(days=30)))
     db.session.commit();flash('Email verified. Your AssetTrack 360 account is now active.','ok');return redirect(url_for('main.login'))
 
 @bp.post('/resend-verification')
