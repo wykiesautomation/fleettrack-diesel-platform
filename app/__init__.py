@@ -160,26 +160,43 @@ def create_app(test_config=None):
 
         email = os.getenv("BOOTSTRAP_ADMIN_EMAIL", "").strip().lower()
         password = os.getenv("BOOTSTRAP_ADMIN_PASSWORD", "")
-        if email and password and not User.query.filter_by(email=email).first():
-            customer = Customer(
-                name="AssetTrack 360 Administration",
-                slug="platform-admin",
-                active=True,
-            )
-            db.session.add(customer)
-            db.session.flush()
-            db.session.add(
-                User(
-                    customer_id=customer.id,
-                    email=email,
-                    name="Platform Administrator",
-                    role="platform_admin",
-                    password_hash=generate_password_hash(password),
-                    active=True,
-                    email_verified=True,
-                    email_verified_at=datetime.now(timezone.utc),
+        if email and password:
+            admin_user = User.query.filter_by(email=email).first()
+            if admin_user:
+                # Promote the existing owner account without changing its password
+                # or moving its current customer data.
+                User.query.filter(
+                    User.role == "platform_admin",
+                    User.id != admin_user.id,
+                ).update({"role": "customer_admin"}, synchronize_session=False)
+                admin_user.role = "platform_admin"
+                admin_user.active = True
+                admin_user.email_verified = True
+                admin_user.email_verified_at = admin_user.email_verified_at or datetime.now(timezone.utc)
+                admin_user.verification_nonce = None
+                admin_user.customer.active = True
+            else:
+                customer = Customer.query.filter_by(slug="platform-admin").first()
+                if not customer:
+                    customer = Customer(
+                        name="AssetTrack 360 Administration",
+                        slug="platform-admin",
+                        active=True,
+                    )
+                    db.session.add(customer)
+                    db.session.flush()
+                db.session.add(
+                    User(
+                        customer_id=customer.id,
+                        email=email,
+                        name="Platform Administrator",
+                        role="platform_admin",
+                        password_hash=generate_password_hash(password),
+                        active=True,
+                        email_verified=True,
+                        email_verified_at=datetime.now(timezone.utc),
+                    )
                 )
-            )
             db.session.commit()
 
         plan_specs = [
