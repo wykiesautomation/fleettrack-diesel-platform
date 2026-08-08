@@ -20,7 +20,7 @@ def config():
         'passphrase': os.getenv('PAYFAST_PASSPHRASE', '').strip(),
         'base_url': os.getenv(
             'APP_BASE_URL',
-            'https://fleettrack.wykiesautomation.co.za',
+            'https://assettrack360.wykiesautomation.co.za',
         ).strip().rstrip('/'),
         'validate_ip': os.getenv('PAYFAST_VALIDATE_IP', 'false').strip().lower()
         == 'true',
@@ -142,7 +142,7 @@ def server_validate(form, cfg):
                 data=body,
                 headers={
                     'Content-Type': 'application/x-www-form-urlencoded',
-                    'User-Agent': 'AssetTrack360/REV18G',
+                    'User-Agent': 'AssetTrack360/1.0',
                 },
             ),
             timeout=15,

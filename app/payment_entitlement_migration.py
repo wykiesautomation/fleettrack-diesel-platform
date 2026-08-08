@@ -1,6 +1,6 @@
 from sqlalchemy import inspect,text
-SUB_COLS={'billing_term':"VARCHAR(20) DEFAULT 'MONTHLY' NOT NULL",'paid_from':'TIMESTAMP','paid_until':'TIMESTAMP','auto_renew':'BOOLEAN DEFAULT TRUE NOT NULL'}
-PAY_COLS={'billing_term':"VARCHAR(20) DEFAULT 'MONTHLY' NOT NULL",'term_months':'INTEGER DEFAULT 1 NOT NULL'}
+SUB_COLS={'billing_term':"VARCHAR(20) DEFAULT 'MONTHLY' NOT NULL",'paid_from':'TIMESTAMP','paid_until':'TIMESTAMP','auto_renew':'BOOLEAN DEFAULT TRUE NOT NULL','access_source':"VARCHAR(30) DEFAULT 'PAYMENT_REQUIRED' NOT NULL"}
+PAY_COLS={'billing_term':"VARCHAR(20) DEFAULT 'MONTHLY' NOT NULL",'term_months':'INTEGER DEFAULT 1 NOT NULL','invoice_number':'VARCHAR(60)','admin_note':'VARCHAR(500)'}
 def ensure_payment_entitlement_schema(db):
     inspector=inspect(db.engine);tables=set(inspector.get_table_names())
     with db.engine.begin() as connection:

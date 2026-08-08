@@ -105,7 +105,7 @@ class PaymentRecord(db.Model):
     id=db.Column(db.Integer,primary_key=True); customer_id=db.Column(db.Integer,db.ForeignKey('customer.id'),nullable=False,index=True); subscription_id=db.Column(db.Integer,db.ForeignKey('subscription.id'),index=True)
     provider=db.Column(db.String(30),default='PAYFAST',nullable=False); provider_reference=db.Column(db.String(180),unique=True,index=True); merchant_payment_id=db.Column(db.String(100),unique=True,index=True)
     amount_gross=db.Column(db.Float,nullable=False,default=0); currency=db.Column(db.String(8),default='ZAR',nullable=False); status=db.Column(db.String(30),default='PENDING',nullable=False,index=True)
-    payment_method=db.Column(db.String(40)); billing_term=db.Column(db.String(20),default='MONTHLY',nullable=False); term_months=db.Column(db.Integer,default=1,nullable=False); raw_summary=db.Column(db.JSON,default=dict); paid_at=db.Column(db.DateTime(timezone=True)); created_at=db.Column(db.DateTime(timezone=True),default=now,nullable=False)
+    payment_method=db.Column(db.String(40)); invoice_number=db.Column(db.String(60),unique=True,index=True); admin_note=db.Column(db.String(500)); billing_term=db.Column(db.String(20),default='MONTHLY',nullable=False); term_months=db.Column(db.Integer,default=1,nullable=False); raw_summary=db.Column(db.JSON,default=dict); paid_at=db.Column(db.DateTime(timezone=True)); created_at=db.Column(db.DateTime(timezone=True),default=now,nullable=False)
 
 class PayFastEvent(db.Model):
     id=db.Column(db.Integer,primary_key=True); provider_reference=db.Column(db.String(180),index=True); merchant_payment_id=db.Column(db.String(100),index=True)

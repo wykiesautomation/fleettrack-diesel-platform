@@ -121,9 +121,9 @@ def entitlement_for(customer_id):
 @bp.before_app_request
 def enforce_subscription_access():
     if not current_user.is_authenticated:return None
+    if current_user.role=='platform_admin':return None
     if request.endpoint in ALLOWED_BILLING_ENDPOINTS or request.endpoint is None:return None
     allowed,sub=entitlement_for(current_user.customer_id)
-    if current_user.role=='platform_admin':return None
     if not allowed:return redirect(url_for('main.subscription_required'))
 
 @bp.get('/fleet-tracking-south-africa')
@@ -1214,12 +1214,15 @@ def payfast_notify():
         if accepted:
             payment.status = 'COMPLETE'
             payment.paid_at = utcnow()
+            payment.invoice_number = payment.invoice_number or f'AT360-INV-{payment.id:07d}'
             sub = Subscription.query.filter_by(id=payment.subscription_id).first()
             old = sub.state
             sub.state = 'ACTIVE'
             sub.access_source = 'PAID'
             sub.current_period_start = utcnow()
             sub.current_period_end = utcnow() + timedelta(days=30)
+            sub.paid_from = sub.current_period_start
+            sub.paid_until = sub.current_period_end
             sub.next_payment_at = sub.current_period_end
             sub.grace_ends_at = None
             sub.payfast_subscription_token = form.get('token') or sub.payfast_subscription_token

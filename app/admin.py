@@ -1,147 +1,121 @@
 from functools import wraps
 from datetime import datetime, timezone, timedelta
+import secrets
 from flask import Blueprint, abort, flash, redirect, render_template, request, url_for
 from flask_login import current_user, login_required
 from sqlalchemy import desc, or_
+from werkzeug.security import generate_password_hash
 from . import db
-from .models import Customer, User, Asset, Device, Subscription, SubscriptionPlan, PaymentRecord, PayFastEvent, SubscriptionAuditEvent, SecurityAuditEvent, DataDeletionRequest, Site, SignalDefinition, Reading, Alarm, Location, WorkspaceProfile, MobileTrackerRegistration, MobileConsent, CoreAlarmState, AssetFeatureOverride, AssetAlertSettings, FleetFeatureDefaults, IntegrationConnector, IntegrationSignalMapping, IntegrationEvent, ConnectorEndpointConfig, UniversalSourceMapping, WebhookReceipt, EdgeGateway, IntegrationJobEvent, MqttSubscription, MqttTopicMapping, MqttMessageEvent
-
+from .models import *
+from .security_privacy import audit
 admin_bp=Blueprint('admin',__name__,url_prefix='/platform-admin')
-def utcnow(): return datetime.now(timezone.utc)
-def aware(v): return v if not v or v.tzinfo else v.replace(tzinfo=timezone.utc)
+def utcnow():return datetime.now(timezone.utc)
+def aware(v):return v if not v or v.tzinfo else v.replace(tzinfo=timezone.utc)
 def owner_only(fn):
  @wraps(fn)
  @login_required
- def wrapped(*args,**kwargs):
-  if current_user.role!='platform_admin': abort(403)
-  return fn(*args,**kwargs)
+ def wrapped(*a,**k):
+  if current_user.role!='platform_admin':abort(403)
+  return fn(*a,**k)
  return wrapped
-def customer_name_map(): return {c.id:c.name for c in Customer.query.all()}
-def admin_audit(kind,cid,summary): db.session.add(SecurityAuditEvent(customer_id=cid or current_user.customer_id,event_type=kind,actor_type='PLATFORM_ADMIN',actor_id=current_user.id,safe_summary=summary[:500],source_ip=(request.headers.get('CF-Connecting-IP') or request.remote_addr or '')[:80]))
-
-def billing_state(sub):
+def cname(cid):
+ c=db.session.get(Customer,cid);return c.name if c else f'Customer #{cid}'
+def access_label(sub):
  if not sub:return 'MISSING'
- if sub.access_source=='COMPLIMENTARY' and sub.state=='ACTIVE':return 'COMPLIMENTARY'
+ if sub.state=='ACTIVE' and sub.access_source=='COMPLIMENTARY':return 'COMPLIMENTARY'
  if sub.state=='ACTIVE':return 'PAID'
  return sub.state
-
+def log(kind,cid,summary):audit(cid or current_user.customer_id,kind,actor_type='PLATFORM_ADMIN',actor_id=current_user.id,summary=summary)
+def next_invoice(payment):return payment.invoice_number or f'AT360-INV-{payment.id:07d}'
 @admin_bp.get('/')
 @owner_only
-def overview():
- now=utcnow();month=now.replace(day=1,hour=0,minute=0,second=0,microsecond=0);payments=PaymentRecord.query.filter(PaymentRecord.created_at>=month).all();names=customer_name_map()
- complete=[p for p in payments if p.status=='COMPLETE'];pending=[p for p in payments if p.status=='PENDING'];failed=[p for p in payments if p.status in ('FAILED','CANCELLED')]
- offline=Device.query.filter(Device.active.is_(True),or_(Device.last_seen.is_(None),Device.last_seen<now-timedelta(minutes=30))).count()
- attention=Subscription.query.join(Customer,Subscription.customer_id==Customer.id).filter(Customer.slug!='platform-admin',Subscription.state.in_(['PAYMENT_REQUIRED','GRACE_PERIOD','SUSPENDED'])).order_by(desc(Subscription.updated_at)).limit(10).all()
- stats={'customers':Customer.query.filter(Customer.slug!='platform-admin').count(),'active_subscriptions':Subscription.query.join(Customer,Subscription.customer_id==Customer.id).filter(Customer.slug!='platform-admin',Subscription.state=='ACTIVE').count(),'paid_month':sum(float(p.amount_gross or 0) for p in complete),'pending_count':len(pending),'failed_count':len(failed),'devices':Device.query.count(),'offline':offline,'notifications':len(attention)+len(failed)}
- return render_template('platform_admin_overview.html',stats=stats,attention=attention,recent=PaymentRecord.query.order_by(desc(PaymentRecord.created_at)).limit(10).all(),names=names)
-
-@admin_bp.get('/customers')
+def dashboard():
+ n=utcnow();month=n.replace(day=1,hour=0,minute=0,second=0,microsecond=0);pay=PaymentRecord.query.filter(PaymentRecord.created_at>=month).all();bad=Subscription.query.join(Customer,Subscription.customer_id==Customer.id).filter(Customer.slug!='platform-admin',Subscription.state.in_(['PAYMENT_REQUIRED','GRACE_PERIOD','SUSPENDED'])).order_by(desc(Subscription.updated_at)).limit(10).all();offline=Device.query.filter(Device.active.is_(True),or_(Device.last_seen.is_(None),Device.last_seen<n-timedelta(minutes=30))).count();stats={'customers':Customer.query.filter(Customer.slug!='platform-admin').count(),'users':User.query.join(Customer,User.customer_id==Customer.id).filter(Customer.slug!='platform-admin').count(),'active':Subscription.query.join(Customer,Subscription.customer_id==Customer.id).filter(Customer.slug!='platform-admin',Subscription.state=='ACTIVE').count(),'paid':sum(float(x.amount_gross or 0) for x in pay if x.status=='COMPLETE'),'pending':sum(1 for x in pay if x.status=='PENDING'),'failed':sum(1 for x in pay if x.status in ('FAILED','CANCELLED')),'devices':Device.query.count(),'offline':offline,'notifications':len(bad)};return render_template('platform_admin_overview.html',stats=stats,attention=bad,recent=PaymentRecord.query.order_by(desc(PaymentRecord.created_at)).limit(10).all(),cname=cname)
+@admin_bp.route('/customers',methods=['GET','POST'])
 @owner_only
 def customers():
- q=request.args.get('q','').strip().lower();state=request.args.get('state','').strip().upper();rows=[];names=customer_name_map()
+ if request.method=='POST':
+  company=request.form.get('company','').strip();name=request.form.get('name','').strip();email=request.form.get('email','').strip().lower();password=request.form.get('password','')
+  if len(company)<2 or len(name)<2 or '@' not in email or len(password)<10:flash('Complete all fields. Password must be at least 10 characters.','error')
+  elif User.query.filter_by(email=email).first():flash('That email already exists.','error')
+  else:
+   slug=''.join(ch.lower() if ch.isalnum() else '-' for ch in company).strip('-')[:70] or 'customer';base=slug;i=1
+   while Customer.query.filter_by(slug=slug).first():i+=1;slug=f'{base}-{i}'
+   c=Customer(name=company,slug=slug,active=True);db.session.add(c);db.session.flush();u=User(customer_id=c.id,email=email,name=name,role='customer_admin',password_hash=generate_password_hash(password),active=True,email_verified=True,email_verified_at=utcnow());db.session.add(u);plan=SubscriptionPlan.query.filter_by(code='monitor').first() or SubscriptionPlan.query.filter_by(active=True).first();db.session.add(Subscription(customer_id=c.id,plan_id=plan.id,state='PAYMENT_REQUIRED',access_source='PAYMENT_REQUIRED',trial_started_at=utcnow()));db.session.add(WorkspaceProfile(customer_id=c.id,contact_email=email,billing_email=email));log('PLATFORM_CUSTOMER_CREATED',c.id,email);db.session.commit();flash('Customer created. Payment is required before operational access.','ok');return redirect(url_for('admin.customer_detail',customer_id=c.id))
+ q=request.args.get('q','').strip().lower();state=request.args.get('state','').strip().upper();rows=[]
  for c in Customer.query.filter(Customer.slug!='platform-admin').order_by(desc(Customer.created_at)).all():
-  users=User.query.filter_by(customer_id=c.id).all();sub=Subscription.query.filter_by(customer_id=c.id).first()
-  if q and q not in c.name.lower() and q not in c.slug.lower() and not any(q in u.email.lower() for u in users):continue
-  if state and billing_state(sub)!=state and (not sub or sub.state!=state):continue
-  last=PaymentRecord.query.filter_by(customer_id=c.id,status='COMPLETE').order_by(desc(PaymentRecord.paid_at)).first()
-  rows.append({'customer':c,'users':users,'sub':sub,'access':billing_state(sub),'assets':Asset.query.filter_by(customer_id=c.id).count(),'devices':Device.query.filter_by(customer_id=c.id).count(),'last':last})
+  us=User.query.filter_by(customer_id=c.id).all();sub=Subscription.query.filter_by(customer_id=c.id).first()
+  if q and q not in c.name.lower() and q not in c.slug.lower() and not any(q in u.email.lower() for u in us):continue
+  if state and access_label(sub)!=state and (not sub or sub.state!=state):continue
+  rows.append({'c':c,'users':us,'sub':sub,'access':access_label(sub),'assets':Asset.query.filter_by(customer_id=c.id).count(),'devices':Device.query.filter_by(customer_id=c.id).count(),'last':PaymentRecord.query.filter_by(customer_id=c.id,status='COMPLETE').order_by(desc(PaymentRecord.paid_at)).first()})
  return render_template('platform_admin_customers.html',rows=rows,q=q,state=state)
-
-@admin_bp.get('/users')
-@owner_only
-def users():
- q=request.args.get('q','').strip().lower();rows=User.query.join(Customer,User.customer_id==Customer.id).filter(Customer.slug!='platform-admin').order_by(desc(User.created_at)).all()
- if q:rows=[u for u in rows if q in u.email.lower() or q in u.name.lower() or q in u.customer.name.lower()]
- return render_template('platform_admin_users.html',rows=rows,q=q)
-
-@admin_bp.get('/subscriptions')
-@owner_only
-def subscriptions():
- rows=Subscription.query.join(Customer,Subscription.customer_id==Customer.id).filter(Customer.slug!='platform-admin').order_by(desc(Subscription.updated_at)).all()
- return render_template('platform_admin_subscriptions.html',rows=rows,billing_state=billing_state)
-
-@admin_bp.get('/payments')
-@owner_only
-def payments():
- status=request.args.get('status','').strip().upper();q=request.args.get('q','').strip().lower();names=customer_name_map();rows=PaymentRecord.query.order_by(desc(PaymentRecord.created_at)).limit(1000).all()
- if status:rows=[p for p in rows if p.status==status]
- if q:rows=[p for p in rows if q in names.get(p.customer_id,'').lower() or q in str(p.merchant_payment_id or '').lower() or q in str(p.provider_reference or '').lower()]
- return render_template('platform_admin_payments.html',rows=rows,names=names,status=status,q=q,complete=sum(float(p.amount_gross or 0) for p in rows if p.status=='COMPLETE'),pending=sum(float(p.amount_gross or 0) for p in rows if p.status=='PENDING'),failed=sum(1 for p in rows if p.status in ('FAILED','CANCELLED')))
-
-@admin_bp.post('/payments/eft')
-@owner_only
-def record_eft():
- cid=request.form.get('customer_id',type=int);customer=Customer.query.filter(Customer.id==cid,Customer.slug!='platform-admin').first_or_404();amount=request.form.get('amount',type=float);reference=request.form.get('reference','').strip();status=request.form.get('status','PENDING').upper()
- if not amount or amount<=0 or not reference or status not in ('PENDING','COMPLETE'):flash('Valid customer, amount, reference and status are required.','error');return redirect(url_for('admin.payments'))
- if PaymentRecord.query.filter_by(merchant_payment_id=reference).first():flash('That payment reference already exists.','error');return redirect(url_for('admin.payments'))
- sub=Subscription.query.filter_by(customer_id=cid).first();p=PaymentRecord(customer_id=cid,subscription_id=sub.id if sub else None,provider='MANUAL_EFT',merchant_payment_id=reference,amount_gross=amount,status=status,payment_method='EFT',paid_at=utcnow() if status=='COMPLETE' else None);db.session.add(p)
- if status=='COMPLETE' and sub:
-  old=sub.state;sub.state='ACTIVE';sub.access_source='PAID';sub.current_period_start=utcnow();sub.current_period_end=utcnow()+timedelta(days=30);sub.paid_from=sub.current_period_start;sub.paid_until=sub.current_period_end;sub.next_payment_at=sub.current_period_end
-  db.session.add(SubscriptionAuditEvent(customer_id=cid,subscription_id=sub.id,previous_state=old,new_state='ACTIVE',reason='Manual EFT recorded by platform owner'))
- admin_audit('MANUAL_EFT_RECORDED',cid,f'{reference} R{amount:.2f} {status}');db.session.commit();flash('EFT payment recorded.','ok');return redirect(url_for('admin.payments'))
-
-@admin_bp.get('/invoices')
-@owner_only
-def invoices():
- names=customer_name_map();rows=PaymentRecord.query.order_by(desc(PaymentRecord.created_at)).limit(1000).all();return render_template('platform_admin_invoices.html',rows=rows,names=names)
-
-@admin_bp.get('/devices')
-@owner_only
-def devices():
- now=utcnow();rows=[]
- for d in Device.query.order_by(desc(Device.last_seen)).all():rows.append({'device':d,'online':bool(d.active and d.last_seen and now-aware(d.last_seen)<=timedelta(minutes=30))})
- return render_template('platform_admin_devices.html',rows=rows)
-
-@admin_bp.get('/support')
-@owner_only
-def support():
- rows=DataDeletionRequest.query.order_by(desc(DataDeletionRequest.requested_at)).limit(500).all();return render_template('platform_admin_support.html',rows=rows,names=customer_name_map())
-
-@admin_bp.get('/audit')
-@owner_only
-def audit():return render_template('platform_admin_audit.html',rows=SecurityAuditEvent.query.order_by(desc(SecurityAuditEvent.created_at)).limit(1000).all(),names=customer_name_map())
-
-@admin_bp.get('/settings')
-@owner_only
-def settings():return render_template('platform_admin_settings.html',plans=SubscriptionPlan.query.order_by(SubscriptionPlan.monthly_price).all())
-
 @admin_bp.get('/customers/<int:customer_id>')
 @owner_only
 def customer_detail(customer_id):
- c=Customer.query.filter(Customer.id==customer_id,Customer.slug!='platform-admin').first_or_404();sub=Subscription.query.filter_by(customer_id=c.id).first()
- return render_template('platform_admin_customer.html',customer=c,users=User.query.filter_by(customer_id=c.id).all(),assets=Asset.query.filter_by(customer_id=c.id).all(),devices=Device.query.filter_by(customer_id=c.id).all(),sub=sub,access=billing_state(sub),payments=PaymentRecord.query.filter_by(customer_id=c.id).order_by(desc(PaymentRecord.created_at)).all())
-
+ c=Customer.query.filter(Customer.id==customer_id,Customer.slug!='platform-admin').first_or_404();sub=Subscription.query.filter_by(customer_id=customer_id).first();return render_template('platform_admin_customer.html',c=c,sub=sub,access=access_label(sub),users=User.query.filter_by(customer_id=customer_id).all(),assets=Asset.query.filter_by(customer_id=customer_id).all(),devices=Device.query.filter_by(customer_id=customer_id).all(),payments=PaymentRecord.query.filter_by(customer_id=customer_id).order_by(desc(PaymentRecord.created_at)).all(),next_invoice=next_invoice)
 @admin_bp.post('/customers/<int:customer_id>/access')
 @owner_only
 def access(customer_id):
- c=Customer.query.filter(Customer.id==customer_id,Customer.slug!='platform-admin').first_or_404();sub=Subscription.query.filter_by(customer_id=c.id).first_or_404();action=request.form.get('action');old=sub.state
- if action=='complimentary':sub.state='ACTIVE';sub.access_source='COMPLIMENTARY';c.active=True
- elif action=='payment_required':sub.state='PAYMENT_REQUIRED';sub.access_source='PAYMENT_REQUIRED'
- elif action=='suspend':sub.state='SUSPENDED';sub.access_source='SUSPENDED'
+ c=Customer.query.filter(Customer.id==customer_id,Customer.slug!='platform-admin').first_or_404();s=Subscription.query.filter_by(customer_id=customer_id).first_or_404();a=request.form.get('action');old=s.state
+ if a=='complimentary':s.state='ACTIVE';s.access_source='COMPLIMENTARY';c.active=True
+ elif a=='payment_required':s.state='PAYMENT_REQUIRED';s.access_source='PAYMENT_REQUIRED'
+ elif a=='suspend':s.state='SUSPENDED';s.access_source='SUSPENDED'
  else:abort(400)
- db.session.add(SubscriptionAuditEvent(customer_id=c.id,subscription_id=sub.id,previous_state=old,new_state=sub.state,reason='Platform owner: '+action));admin_audit('PLATFORM_ACCESS_CHANGED',c.id,action);db.session.commit();flash('Customer access updated.','ok');return redirect(url_for('admin.customer_detail',customer_id=c.id))
-
-@admin_bp.post('/users/<int:user_id>/verify')
+ db.session.add(SubscriptionAuditEvent(customer_id=customer_id,subscription_id=s.id,previous_state=old,new_state=s.state,reason='Platform owner: '+a));log('PLATFORM_ACCESS_CHANGED',customer_id,a);db.session.commit();flash('Access updated.','ok');return redirect(url_for('admin.customer_detail',customer_id=customer_id))
+@admin_bp.get('/users')
 @owner_only
-def verify_user(user_id):
- u=User.query.join(Customer,User.customer_id==Customer.id).filter(User.id==user_id,Customer.slug!='platform-admin').first_or_404();u.email_verified=True;u.email_verified_at=utcnow();u.verification_nonce=None;u.customer.active=True;admin_audit('PLATFORM_EMAIL_VERIFIED',u.customer_id,u.email);db.session.commit();flash('User verified.','ok');return redirect(request.referrer or url_for('admin.users'))
-
-@admin_bp.post('/users/<int:user_id>/toggle')
+def users():
+ q=request.args.get('q','').strip().lower();rows=User.query.join(Customer,User.customer_id==Customer.id).filter(Customer.slug!='platform-admin').order_by(desc(User.created_at)).all();rows=[x for x in rows if not q or q in x.email.lower() or q in x.name.lower() or q in x.customer.name.lower()];return render_template('platform_admin_users.html',rows=rows,q=q)
+@admin_bp.post('/users/<int:user_id>/<action>')
 @owner_only
-def toggle_user(user_id):
- u=User.query.join(Customer,User.customer_id==Customer.id).filter(User.id==user_id,Customer.slug!='platform-admin').first_or_404();u.active=not u.active;admin_audit('PLATFORM_USER_TOGGLED',u.customer_id,f'{u.email}: {u.active}');db.session.commit();return redirect(request.referrer or url_for('admin.users'))
-
+def user_action(user_id,action):
+ u=User.query.join(Customer,User.customer_id==Customer.id).filter(User.id==user_id,Customer.slug!='platform-admin').first_or_404()
+ if action=='verify':u.email_verified=True;u.email_verified_at=utcnow();u.verification_nonce=None;u.customer.active=True
+ elif action=='toggle':u.active=not u.active
+ else:abort(400)
+ log('PLATFORM_USER_'+action.upper(),u.customer_id,u.email);db.session.commit();return redirect(request.referrer or url_for('admin.users'))
+@admin_bp.get('/subscriptions')
+@owner_only
+def subscriptions():return render_template('platform_admin_subscriptions.html',rows=Subscription.query.join(Customer,Subscription.customer_id==Customer.id).filter(Customer.slug!='platform-admin').order_by(desc(Subscription.updated_at)).all(),access_label=access_label)
+@admin_bp.route('/payments',methods=['GET','POST'])
+@owner_only
+def payments():
+ if request.method=='POST':
+  cid=request.form.get('customer_id',type=int);c=Customer.query.filter(Customer.id==cid,Customer.slug!='platform-admin').first();amount=request.form.get('amount',type=float);ref=request.form.get('reference','').strip();status=request.form.get('status','PENDING').upper()
+  if not c or not amount or amount<=0 or not ref or status not in ('PENDING','COMPLETE'):flash('Valid customer, amount, reference and status required.','error')
+  elif PaymentRecord.query.filter_by(merchant_payment_id=ref).first():flash('Reference already exists.','error')
+  else:
+   sub=Subscription.query.filter_by(customer_id=cid).first();p=PaymentRecord(customer_id=cid,subscription_id=sub.id if sub else None,provider='MANUAL_EFT',merchant_payment_id=ref,amount_gross=amount,status=status,payment_method='EFT',paid_at=utcnow() if status=='COMPLETE' else None,admin_note=request.form.get('note','')[:500]);db.session.add(p);db.session.flush();p.invoice_number=next_invoice(p)
+   if status=='COMPLETE' and sub:
+    old=sub.state;sub.state='ACTIVE';sub.access_source='PAID';sub.current_period_start=utcnow();sub.current_period_end=utcnow()+timedelta(days=30);sub.paid_from=sub.current_period_start;sub.paid_until=sub.current_period_end;sub.next_payment_at=sub.current_period_end;db.session.add(SubscriptionAuditEvent(customer_id=cid,subscription_id=sub.id,previous_state=old,new_state='ACTIVE',reason='Manual EFT recorded'))
+   log('MANUAL_EFT_RECORDED',cid,ref);db.session.commit();flash('EFT payment recorded.','ok');return redirect(url_for('admin.payments'))
+ st=request.args.get('status','').upper();q=request.args.get('q','').lower();rows=PaymentRecord.query.order_by(desc(PaymentRecord.created_at)).limit(1000).all();rows=[x for x in rows if (not st or x.status==st) and (not q or q in cname(x.customer_id).lower() or q in str(x.merchant_payment_id or '').lower())];return render_template('platform_admin_payments.html',rows=rows,st=st,q=q,cname=cname,next_invoice=next_invoice,complete=sum(float(x.amount_gross or 0) for x in rows if x.status=='COMPLETE'),pending=sum(float(x.amount_gross or 0) for x in rows if x.status=='PENDING'),failed=sum(1 for x in rows if x.status in ('FAILED','CANCELLED')))
+@admin_bp.get('/invoices')
+@owner_only
+def invoices():return render_template('platform_admin_invoices.html',rows=PaymentRecord.query.order_by(desc(PaymentRecord.created_at)).limit(1000).all(),cname=cname,next_invoice=next_invoice)
+@admin_bp.get('/devices')
+@owner_only
+def devices():
+ n=utcnow();rows=[{'d':d,'online':bool(d.active and d.last_seen and n-aware(d.last_seen)<=timedelta(minutes=30))} for d in Device.query.order_by(desc(Device.last_seen)).all()];return render_template('platform_admin_devices.html',rows=rows,cname=cname)
+@admin_bp.get('/support')
+@owner_only
+def support():return render_template('platform_admin_support.html',rows=DataDeletionRequest.query.order_by(desc(DataDeletionRequest.requested_at)).limit(500).all(),cname=cname)
+@admin_bp.get('/audit')
+@owner_only
+def audit_log():return render_template('platform_admin_audit.html',rows=SecurityAuditEvent.query.order_by(desc(SecurityAuditEvent.created_at)).limit(1000).all(),cname=cname)
+@admin_bp.get('/settings')
+@owner_only
+def settings():return render_template('platform_admin_settings.html',plans=SubscriptionPlan.query.order_by(SubscriptionPlan.monthly_price).all())
 @admin_bp.post('/customers/<int:customer_id>/delete')
 @owner_only
 def delete_customer(customer_id):
  c=Customer.query.filter(Customer.id==customer_id,Customer.slug!='platform-admin').first_or_404()
- if request.form.get('confirm_name','').strip()!=c.name or request.form.get('confirm_word','').strip().upper()!='DELETE':flash('Exact customer name and DELETE are required.','error');return redirect(url_for('admin.customer_detail',customer_id=c.id))
+ if request.form.get('confirm_name','').strip()!=c.name or request.form.get('confirm_word','').strip().upper()!='DELETE':flash('Exact customer name and DELETE required.','error');return redirect(url_for('admin.customer_detail',customer_id=customer_id))
  cid=c.id
  try:
   connector_ids=[x.id for x in IntegrationConnector.query.filter_by(customer_id=cid).all()]
-  if connector_ids:
-   ConnectorEndpointConfig.query.filter(ConnectorEndpointConfig.connector_id.in_(connector_ids)).delete(synchronize_session=False)
+  if connector_ids:ConnectorEndpointConfig.query.filter(ConnectorEndpointConfig.connector_id.in_(connector_ids)).delete(synchronize_session=False)
   for model in (Reading,Location,Alarm,CoreAlarmState,DataDeletionRequest,MobileConsent,MobileTrackerRegistration,SecurityAuditEvent,AssetFeatureOverride,AssetAlertSettings,FleetFeatureDefaults,MqttMessageEvent,MqttTopicMapping,MqttSubscription,WebhookReceipt,IntegrationJobEvent,UniversalSourceMapping,IntegrationSignalMapping,IntegrationEvent,EdgeGateway,PaymentRecord,SubscriptionAuditEvent,SignalDefinition,Device,Asset,Site,WorkspaceProfile,Subscription,User):
    if hasattr(model,'customer_id'):model.query.filter_by(customer_id=cid).delete(synchronize_session=False)
-  IntegrationConnector.query.filter_by(customer_id=cid).delete(synchronize_session=False);name=c.name;db.session.delete(c);db.session.commit();flash(name+' permanently deleted.','ok');return redirect(url_for('admin.customers'))
+  IntegrationConnector.query.filter_by(customer_id=cid).delete(synchronize_session=False);name=c.name;db.session.delete(c);db.session.commit();flash(name+' deleted.','ok');return redirect(url_for('admin.customers'))
  except Exception as exc:db.session.rollback();flash('Delete blocked safely: '+type(exc).__name__+'. No partial deletion committed.','error');return redirect(url_for('admin.customer_detail',customer_id=cid))
