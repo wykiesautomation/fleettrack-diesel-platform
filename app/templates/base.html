@@ -9,12 +9,16 @@
 </head>
 <body>
     <header>
-        <a class="brand" href="{{ url_for('main.dashboard') }}">
+        <a class="brand" href="{{ url_for('admin.dashboard') if current_user.is_authenticated and current_user.role == 'platform_admin' else url_for('main.dashboard') }}">
             AssetTrack <b>360</b>
         </a>
-
         {% if current_user.is_authenticated %}
         <nav>
+            {% if current_user.role == 'platform_admin' %}
+            <a href="{{ url_for('admin.dashboard') }}">Platform Admin</a>
+            <a href="{{ url_for('main.dashboard') }}">Customer Dashboard</a>
+            <a href="{{ url_for('main.logout') }}">Sign out</a>
+            {% else %}
             <a href="{{ url_for('main.dashboard') }}">Fleet</a>
             <a href="{{ url_for('main.onboarding') }}">Add Asset</a>
             <a href="{{ url_for('main.test_data_cleanup') }}">Manage Assets</a>
@@ -25,18 +29,16 @@
             <a href="{{ url_for('main.account') }}">Account</a>
             <a href="{{ url_for('main.billing') }}">Billing</a>
             <a href="{{ url_for('main.logout') }}">Sign out</a>
+            {% endif %}
         </nav>
         {% endif %}
     </header>
-
     <main>
         {% for category, message in get_flashed_messages(with_categories=true) %}
         <div class="flash {{ category }}">{{ message }}</div>
         {% endfor %}
-
         {% block body %}{% endblock %}
     </main>
-
     <footer>
         <div>Remote asset visibility across devices, signals and sites.</div>
         <div class="legal-links">
@@ -50,7 +52,6 @@
         </div>
         <div>Copyright: © 2026 JP Van Wyk. All rights reserved.</div>
     </footer>
-
     {% block scripts %}{% endblock %}
 </body>
 </html>
