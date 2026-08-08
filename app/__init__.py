@@ -158,8 +158,6 @@ def create_app(test_config=None):
     app.register_blueprint(edge_bp)
     from .admin import admin_bp
     app.register_blueprint(admin_bp)
-    from .admin import admin_bp
-    app.register_blueprint(admin_bp)
 
     with app.app_context():
         from . import edge_models  # Registers REV20A tables before create_all.
@@ -167,11 +165,7 @@ def create_app(test_config=None):
 
         email = os.getenv("BOOTSTRAP_ADMIN_EMAIL", "").strip().lower()
         password = os.getenv("BOOTSTRAP_ADMIN_PASSWORD", "")
-        if email and password and User.query.filter_by(email=email).first():
-            admin_user=User.query.filter_by(email=email).first()
-            User.query.filter(User.role=="platform_admin",User.id!=admin_user.id).update({"role":"customer_admin"},synchronize_session=False)
-            admin_user.role="platform_admin";admin_user.active=True;admin_user.email_verified=True;admin_user.email_verified_at=admin_user.email_verified_at or datetime.now(timezone.utc);admin_user.verification_nonce=None;admin_user.customer.active=True;db.session.commit()
-        elif email and password:
+        if email and password and not User.query.filter_by(email=email).first():
             customer = Customer(
                 name="AssetTrack 360 Administration",
                 slug="platform-admin",

@@ -121,9 +121,9 @@ def entitlement_for(customer_id):
 @bp.before_app_request
 def enforce_subscription_access():
     if not current_user.is_authenticated:return None
-    if current_user.role=='platform_admin':return None
     if request.endpoint in ALLOWED_BILLING_ENDPOINTS or request.endpoint is None:return None
     allowed,sub=entitlement_for(current_user.customer_id)
+    if current_user.role=='platform_admin':return None
     if not allowed:return redirect(url_for('main.subscription_required'))
 
 @bp.get('/fleet-tracking-south-africa')
