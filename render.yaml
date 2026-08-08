@@ -21,3 +21,7 @@ services:
 databases:
   - name: assettrack360-db
     plan: free
+# Add these secret values in Render Dashboard after deploy:
+# SMTP_HOST, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD,
+# SMTP_FROM_EMAIL, SMTP_FROM_NAME, SMTP_USE_TLS, SMTP_USE_SSL
+# PUBLIC_BASE_URL=https://assettrack360.wykiesautomation.co.za
