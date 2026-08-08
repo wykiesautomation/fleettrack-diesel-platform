@@ -98,6 +98,7 @@ class Subscription(db.Model):
     current_period_start=db.Column(db.DateTime(timezone=True)); current_period_end=db.Column(db.DateTime(timezone=True)); next_payment_at=db.Column(db.DateTime(timezone=True)); grace_ends_at=db.Column(db.DateTime(timezone=True))
     billing_term=db.Column(db.String(20),default='MONTHLY',nullable=False,index=True); paid_from=db.Column(db.DateTime(timezone=True)); paid_until=db.Column(db.DateTime(timezone=True)); auto_renew=db.Column(db.Boolean,default=True,nullable=False)
     cancel_at_period_end=db.Column(db.Boolean,default=False,nullable=False); payfast_subscription_token=db.Column(db.String(180)); created_at=db.Column(db.DateTime(timezone=True),default=now,nullable=False); updated_at=db.Column(db.DateTime(timezone=True),default=now,onupdate=now,nullable=False)
+    access_source=db.Column(db.String(30),default='PAYMENT_REQUIRED',nullable=False,index=True)
     customer=db.relationship('Customer'); plan=db.relationship('SubscriptionPlan')
 
 class PaymentRecord(db.Model):

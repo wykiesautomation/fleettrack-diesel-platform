@@ -76,6 +76,11 @@ def ensure_email_verification_schema(app):
         for statement in statements:
             connection.execute(text(statement))
         connection.execute(text('UPDATE "user" SET email_verified = TRUE WHERE email_verified IS NULL'))
+    sub_columns={column['name'] for column in inspector.get_columns('subscription')}
+    if 'access_source' not in sub_columns:
+        with db.engine.begin() as connection:
+            connection.execute(text("ALTER TABLE subscription ADD COLUMN access_source VARCHAR(30) NOT NULL DEFAULT 'PAYMENT_REQUIRED'"))
+            connection.execute(text("UPDATE subscription SET access_source = CASE WHEN state = 'ACTIVE' THEN 'PAID' ELSE 'PAYMENT_REQUIRED' END"))
 
 def create_app(test_config=None):
     app = Flask(__name__)
@@ -153,6 +158,8 @@ def create_app(test_config=None):
     app.register_blueprint(edge_bp)
     from .admin import admin_bp
     app.register_blueprint(admin_bp)
+    from .admin import admin_bp
+    app.register_blueprint(admin_bp)
 
     with app.app_context():
         from . import edge_models  # Registers REV20A tables before create_all.
@@ -160,43 +167,30 @@ def create_app(test_config=None):
 
         email = os.getenv("BOOTSTRAP_ADMIN_EMAIL", "").strip().lower()
         password = os.getenv("BOOTSTRAP_ADMIN_PASSWORD", "")
-        if email and password:
-            admin_user = User.query.filter_by(email=email).first()
-            if admin_user:
-                # Promote the existing owner account without changing its password
-                # or moving its current customer data.
-                User.query.filter(
-                    User.role == "platform_admin",
-                    User.id != admin_user.id,
-                ).update({"role": "customer_admin"}, synchronize_session=False)
-                admin_user.role = "platform_admin"
-                admin_user.active = True
-                admin_user.email_verified = True
-                admin_user.email_verified_at = admin_user.email_verified_at or datetime.now(timezone.utc)
-                admin_user.verification_nonce = None
-                admin_user.customer.active = True
-            else:
-                customer = Customer.query.filter_by(slug="platform-admin").first()
-                if not customer:
-                    customer = Customer(
-                        name="AssetTrack 360 Administration",
-                        slug="platform-admin",
-                        active=True,
-                    )
-                    db.session.add(customer)
-                    db.session.flush()
-                db.session.add(
-                    User(
-                        customer_id=customer.id,
-                        email=email,
-                        name="Platform Administrator",
-                        role="platform_admin",
-                        password_hash=generate_password_hash(password),
-                        active=True,
-                        email_verified=True,
-                        email_verified_at=datetime.now(timezone.utc),
-                    )
+        if email and password and User.query.filter_by(email=email).first():
+            admin_user=User.query.filter_by(email=email).first()
+            User.query.filter(User.role=="platform_admin",User.id!=admin_user.id).update({"role":"customer_admin"},synchronize_session=False)
+            admin_user.role="platform_admin";admin_user.active=True;admin_user.email_verified=True;admin_user.email_verified_at=admin_user.email_verified_at or datetime.now(timezone.utc);admin_user.verification_nonce=None;admin_user.customer.active=True;db.session.commit()
+        elif email and password:
+            customer = Customer(
+                name="AssetTrack 360 Administration",
+                slug="platform-admin",
+                active=True,
+            )
+            db.session.add(customer)
+            db.session.flush()
+            db.session.add(
+                User(
+                    customer_id=customer.id,
+                    email=email,
+                    name="Platform Administrator",
+                    role="platform_admin",
+                    password_hash=generate_password_hash(password),
+                    active=True,
+                    email_verified=True,
+                    email_verified_at=datetime.now(timezone.utc),
                 )
+            )
             db.session.commit()
 
         plan_specs = [
@@ -230,9 +224,10 @@ def create_app(test_config=None):
                     Subscription(
                         customer_id=customer.id,
                         plan_id=plan.id,
-                        state="TRIAL",
+                        state="PAYMENT_REQUIRED",
+                        access_source="PAYMENT_REQUIRED",
                         trial_started_at=started,
-                        trial_ends_at=started + timedelta(days=30),
+                        trial_ends_at=None,
                     )
                 )
         db.session.commit()

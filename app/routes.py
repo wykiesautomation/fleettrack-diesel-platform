@@ -266,7 +266,7 @@ def verify_email(token):
         if not plan:
             db.session.rollback();flash('Account verified, but no subscription plan is available. Contact support.','error');return redirect(url_for('main.login'))
         started=utcnow()
-        db.session.add(Subscription(customer_id=user.customer_id,plan_id=plan.id,state='TRIAL',trial_started_at=started,trial_ends_at=started+timedelta(days=30)))
+        db.session.add(Subscription(customer_id=user.customer_id,plan_id=plan.id,state='PAYMENT_REQUIRED',access_source='PAYMENT_REQUIRED',trial_started_at=started,trial_ends_at=None))
     db.session.commit();flash('Email verified. Your AssetTrack 360 account is now active.','ok');return redirect(url_for('main.login'))
 
 @bp.post('/resend-verification')
@@ -1217,6 +1217,7 @@ def payfast_notify():
             sub = Subscription.query.filter_by(id=payment.subscription_id).first()
             old = sub.state
             sub.state = 'ACTIVE'
+            sub.access_source = 'PAID'
             sub.current_period_start = utcnow()
             sub.current_period_end = utcnow() + timedelta(days=30)
             sub.next_payment_at = sub.current_period_end
