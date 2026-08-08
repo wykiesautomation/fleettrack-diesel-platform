@@ -153,8 +153,6 @@ def create_app(test_config=None):
     app.register_blueprint(edge_bp)
     from .admin import admin_bp
     app.register_blueprint(admin_bp)
-    from .admin import admin_bp
-    app.register_blueprint(admin_bp)
 
     with app.app_context():
         from . import edge_models  # Registers REV20A tables before create_all.
