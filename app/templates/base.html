@@ -9,12 +9,15 @@
 </head>
 <body>
     <header>
-        <a class="brand" href="{{ url_for('main.dashboard') }}">
+        <a class="brand" href="{{ url_for('admin.dashboard') if current_user.is_authenticated and current_user.role == 'platform_admin' else url_for('main.dashboard') }}">
             AssetTrack <b>360</b>
         </a>
 
         {% if current_user.is_authenticated %}
         <nav>
+            {% if current_user.role == 'platform_admin' %}
+            <a href="{{ url_for('admin.dashboard') }}">Platform Admin</a>
+            {% else %}
             <a href="{{ url_for('main.dashboard') }}">Fleet</a>
             <a href="{{ url_for('main.onboarding') }}">Add Asset</a>
             <a href="{{ url_for('main.test_data_cleanup') }}">Manage Assets</a>
@@ -24,6 +27,7 @@
             <a href="{{ url_for('main.connect_device') }}">Connect Device</a>
             <a href="{{ url_for('main.account') }}">Account</a>
             <a href="{{ url_for('main.billing') }}">Billing</a>
+            {% endif %}
             <a href="{{ url_for('main.logout') }}">Sign out</a>
         </nav>
         {% endif %}
