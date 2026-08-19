@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AssetTrack 360 - Device Engineering Studio Final</title>
+<style>
+:root{--navy:#071829;--navy2:#0b2438;--panel:#102c42;--cyan:#25d5e8;--lime:#b7ef42;--text:#eef8ff;--muted:#8eabc0;--line:#24465d;--white:#fff;--danger:#ff6278;--amber:#ffca5c}
+*{box-sizing:border-box} body{margin:0;font-family:Inter,Segoe UI,Arial,sans-serif;background:#061522;color:var(--text);min-height:100vh}
+button,input,select{font:inherit}.app{display:grid;grid-template-columns:270px 1fr;min-height:100vh}
+.sidebar{background:linear-gradient(180deg,#071829,#0b2538);border-right:1px solid #17374c;padding:24px 18px;position:sticky;top:0;height:100vh}
+.brand{display:flex;gap:12px;align-items:center;padding:0 8px 24px}.logo{width:42px;height:42px;border-radius:13px;background:linear-gradient(135deg,var(--cyan),var(--lime));display:grid;place-items:center;color:#06202c;font-weight:900;box-shadow:0 0 28px #25d5e83f}.brand h1{font-size:18px;margin:0}.brand small{color:var(--muted)}
+.nav-label{font-size:11px;letter-spacing:1.5px;color:#638197;margin:20px 10px 8px}.nav-item{display:flex;gap:12px;align-items:center;color:#a5bdcd;padding:12px;border-radius:11px;margin:4px 0}.nav-item.active{background:#14364d;color:#fff;border:1px solid #24546b}.nav-dot{width:8px;height:8px;border-radius:50%;background:#47677d}.active .nav-dot{background:var(--lime);box-shadow:0 0 10px var(--lime)}
+.side-status{position:absolute;bottom:22px;left:18px;right:18px;background:#0d293d;border:1px solid #1d455e;border-radius:14px;padding:14px}.online{color:var(--lime);font-weight:700;font-size:13px}.side-status p{font-size:12px;color:var(--muted);margin:7px 0 0}
+.main{min-width:0}.topbar{height:76px;padding:0 30px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #17374c;background:#081b2a;position:sticky;top:0;z-index:10}.topbar h2{margin:0;font-size:21px}.crumb{color:var(--muted);font-size:13px;margin-top:3px}.top-actions{display:flex;gap:10px}.btn{border:0;border-radius:10px;padding:10px 16px;font-weight:700;cursor:pointer}.btn.ghost{background:#112e43;color:#d7e8f2;border:1px solid #2b5068}.btn.primary{background:linear-gradient(135deg,var(--cyan),#38dfb4);color:#06202a}.btn:hover{filter:brightness(1.08)}
+.content{padding:24px 30px 40px;max-width:1600px;margin:auto}.stepper{display:grid;grid-template-columns:repeat(4,1fr);background:#0a2031;border:1px solid #1a3b51;border-radius:16px;padding:10px;margin-bottom:22px}.step{display:flex;gap:10px;align-items:center;padding:10px 12px;color:#6f8fa4;font-size:13px}.step b{width:28px;height:28px;border-radius:50%;border:1px solid #31546a;display:grid;place-items:center}.step.done{color:#b7cbd8}.step.done b{background:#173f4c;color:var(--lime)}.step.active{color:#fff;background:#123149;border-radius:11px}.step.active b{background:var(--cyan);color:#06212e;border:none}
+.hero-card{background:linear-gradient(120deg,#0e2d43,#0c2437);border:1px solid #22506a;border-radius:18px;padding:20px;display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}.board{display:flex;gap:16px;align-items:center}.board-icon{width:64px;height:64px;border-radius:15px;background:#0a1821;border:1px solid #2f566c;display:grid;place-items:center;color:var(--cyan);font-weight:900}.board h3{margin:0 0 5px}.tags{display:flex;gap:7px;flex-wrap:wrap;margin-top:9px}.tag{padding:5px 8px;border-radius:7px;background:#183b4e;color:#b9d0de;font-size:11px;border:1px solid #2a5368}.tag.ok{color:var(--lime)}.identity{text-align:right}.identity small{color:var(--muted)}.identity strong{display:block;margin-top:5px;color:#d8eff9}
+.grid{display:grid;grid-template-columns:minmax(560px,1.25fr) minmax(400px,.75fr);gap:20px}.card{background:#0a2132;border:1px solid #1e4157;border-radius:18px;overflow:hidden}.card-head{padding:17px 19px;border-bottom:1px solid #1d3c51;display:flex;align-items:center;justify-content:space-between}.card-head h3{margin:0;font-size:16px}.card-head p{margin:4px 0 0;color:var(--muted);font-size:12px}.badge{font-size:11px;padding:6px 9px;border-radius:20px;background:#17394c;color:var(--cyan)}.card-body{padding:18px}
+.pin-row{display:grid;grid-template-columns:48px 1.1fr 1fr 42px;gap:10px;align-items:center;background:#0d293c;border:1px solid #1e4359;padding:11px;border-radius:12px;margin-bottom:8px;cursor:pointer}.pin-row:hover,.pin-row.selected{border-color:#35b7ca;background:#103248}.pin-no{color:var(--cyan);font-weight:850}.pin-row small{color:var(--muted);display:block;margin-top:3px}.pin-mode{font-size:12px;color:#c0d3df}.toggle{width:37px;height:21px;border-radius:20px;background:#29485a;padding:3px;cursor:pointer}.toggle:after{content:"";display:block;width:15px;height:15px;border-radius:50%;background:#7893a4;transition:.2s}.toggle.on{background:#19a9b8}.toggle.on:after{transform:translateX(16px);background:white}
+.notice{background:#102e3f;border-left:3px solid var(--lime);padding:11px 13px;border-radius:8px;color:#b9cfdb;font-size:12px;margin-top:12px}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.field.full{grid-column:1/-1}.field label{display:block;color:#9db6c6;font-size:12px;margin-bottom:7px}.field input,.field select{width:100%;background:#081b29;color:#eaf5fb;border:1px solid #2a4c61;border-radius:9px;padding:10px 11px;outline:none}.field input:focus,.field select:focus{border-color:var(--cyan)}
+.section-title{font-size:12px;text-transform:uppercase;letter-spacing:1px;color:#6f97aa;margin:20px 0 11px;border-top:1px solid #1d4054;padding-top:17px}.shape-list{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}.shape{background:#0b1c29;border:1px solid #29495b;border-radius:11px;min-height:86px;padding:10px;text-align:center;color:#aac1cf;cursor:pointer}.shape:hover,.shape.active{border-color:var(--cyan);background:#103348;color:#fff}.shape-icon{height:42px;display:grid;place-items:center;font-size:27px}.shape span{font-size:11px}
+.thresholds{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.thresholds input{width:100%;background:#081b29;border:1px solid #294c61;color:#fff;border-radius:9px;padding:9px}.thresholds small{display:block;color:#809dae;margin:0 0 5px}
+.preview-card{position:sticky;top:98px}.preview-wrap{min-height:330px;background:radial-gradient(circle at 50% 25%,#16445b,#081b29 65%);display:grid;place-items:center;position:relative;overflow:hidden}.tank-stage{width:320px;height:285px;display:grid;place-items:center;position:relative}
+.tank-shell{position:relative;width:180px;height:240px;border:5px solid #abc7d4;border-top-width:9px;border-radius:25px 25px 18px 18px;overflow:hidden;background:#071b28;box-shadow:0 20px 40px #0008;transition:all .45s ease;z-index:2}
+.tank-shell:before{content:"";position:absolute;top:9px;left:30px;right:30px;height:12px;border:4px solid #90abba;border-radius:50%;z-index:4;transition:all .45s ease}
+.liquid{position:absolute;left:0;right:0;bottom:0;height:67%;background:linear-gradient(#25d5e8cc,#1089bc);transition:height .5s,clip-path .45s,border-radius .45s}
+.liquid:before{content:"";position:absolute;top:-7px;left:-10px;width:calc(100% + 20px);height:16px;border-radius:50%;background:#55e5ef}
+.level-label{position:absolute;z-index:5;inset:0;display:grid;place-items:center;text-align:center;text-shadow:0 2px 5px #022}.level-label strong{font-size:31px}.level-label small{display:block;color:#d6f8fc;margin-top:4px}
+.tank-feet{position:absolute;bottom:3px;width:205px;display:flex;justify-content:space-between;z-index:1}.tank-feet i{width:25px;height:19px;border-radius:0 0 5px 5px;background:#9db6c3;transition:.4s}
+/* Vertical cylinder */
+.tank-stage.vertical .tank-shell{width:180px;height:240px;border-radius:25px 25px 18px 18px}
+/* Horizontal cylinder */
+.tank-stage.horizontal .tank-shell{width:275px;height:150px;border-width:5px 9px;border-radius:75px;}
+.tank-stage.horizontal .tank-shell:before{top:18px;bottom:18px;left:12px;right:auto;width:18px;height:auto;border:4px solid #90abba;border-radius:50%}
+.tank-stage.horizontal .tank-feet{width:210px;bottom:45px}
+/* Rectangular tank */
+.tank-stage.rectangular .tank-shell{width:225px;height:215px;border-width:6px;border-radius:8px}
+.tank-stage.rectangular .tank-shell:before{top:12px;left:72px;right:72px;height:10px;border-radius:4px}
+.tank-stage.rectangular .tank-feet{width:215px;bottom:16px}
+/* Conical bottom tank */
+.tank-stage.conical .tank-shell{width:195px;height:245px;border-radius:22px 22px 76px 76px;clip-path:polygon(0 0,100% 0,100% 70%,72% 100%,28% 100%,0 70%)}
+.tank-stage.conical .liquid{clip-path:polygon(0 0,100% 0,100% 70%,72% 100%,28% 100%,0 70%)}
+.tank-stage.conical .tank-feet{display:none}
+/* Cylinder plus cone */
+.tank-stage.combo .tank-shell{width:195px;height:255px;border-radius:22px 22px 12px 12px;clip-path:polygon(0 0,100% 0,100% 72%,72% 100%,28% 100%,0 72%)}
+.tank-stage.combo .liquid{clip-path:polygon(0 0,100% 0,100% 72%,72% 100%,28% 100%,0 72%)}
+.tank-stage.combo .tank-feet{display:none}
+/* Custom irregular tank */
+.tank-stage.custom .tank-shell{width:225px;height:215px;border-radius:34px 8px 42px 14px;clip-path:polygon(8% 0,92% 4%,100% 25%,94% 100%,12% 94%,0 70%,4% 16%)}
+.tank-stage.custom .tank-shell:before{left:72px;right:72px}
+.tank-stage.custom .liquid{clip-path:polygon(8% 0,92% 4%,100% 25%,94% 100%,12% 94%,0 70%,4% 16%)}
+.tank-stage.custom .tank-feet{width:190px;bottom:17px}
+.shape-caption{position:absolute;top:8px;left:12px;padding:6px 9px;border-radius:8px;background:#071a28cc;border:1px solid #2a5368;color:#a9c5d5;font-size:11px;z-index:7}
+.preview-meta{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:#1b3d52;border-top:1px solid #24485f}.metric{background:#0c2638;padding:14px;text-align:center}.metric small{display:block;color:#7899ac;font-size:10px;text-transform:uppercase}.metric strong{display:block;margin-top:5px;font-size:14px}.status-good{color:var(--lime)}
+.sliderbox{padding:18px}.sliderbox label{display:flex;justify-content:space-between;color:#9db5c4;font-size:12px;margin-bottom:8px}.sliderbox input{width:100%;accent-color:var(--cyan)}
+.calc{margin-top:20px}.calc-row{display:flex;justify-content:space-between;padding:11px 0;border-bottom:1px solid #19384b;font-size:13px}.calc-row span{color:#88a6b8}.calc-row strong{color:#eef8ff}.advanced{margin-top:14px;border:1px solid #24485b;border-radius:12px}.advanced summary{cursor:pointer;padding:13px;color:#b8cfda;font-size:13px}.advanced div{padding:0 13px 13px;color:#7898aa;font-size:12px}
+.toast{position:fixed;right:25px;bottom:25px;background:#f3fff4;color:#0c4825;padding:14px 18px;border-radius:12px;font-weight:750;box-shadow:0 15px 50px #0009;display:none;z-index:30}.toast.show{display:block}
+@media(max-width:1100px){.app{grid-template-columns:80px 1fr}.sidebar{padding:20px 10px}.brand div:last-child,.nav-item span,.nav-label,.side-status{display:none}.brand{padding:0 8px 20px}.grid{grid-template-columns:1fr}.preview-card{position:static}.pin-row{grid-template-columns:48px 1fr 1fr 42px}}
+@media(max-width:720px){.app{display:block}.sidebar{display:none}.topbar{padding:0 16px}.content{padding:16px}.stepper{grid-template-columns:1fr 1fr}.hero-card{align-items:flex-start}.identity{display:none}.form-grid{grid-template-columns:1fr}.field.full{grid-column:auto}.shape-list{grid-template-columns:1fr 1fr}.grid{display:block}.card{margin-bottom:16px}.thresholds{grid-template-columns:1fr 1fr}.top-actions .ghost{display:none}}
+</style>
+</head>
+<body>
+<div class="app">
+<aside class="sidebar">
+  <div class="brand"><div class="logo">A3</div><div><h1>AssetTrack 360</h1><small>Engineering Studio</small></div></div>
+  <div class="nav-label">WORKSPACE</div>
+  <div class="nav-item"><i class="nav-dot"></i><span>Assets</span></div>
+  <div class="nav-item"><i class="nav-dot"></i><span>Devices</span></div>
+  <div class="nav-item active"><i class="nav-dot"></i><span>Device Studio</span></div>
+  <div class="nav-item"><i class="nav-dot"></i><span>Monitoring</span></div>
+  <div class="nav-label">TOOLS</div>
+  <div class="nav-item"><i class="nav-dot"></i><span>Board Library</span></div>
+  <div class="nav-item"><i class="nav-dot"></i><span>Firmware</span></div>
+  <div class="nav-item"><i class="nav-dot"></i><span>Diagnostics</span></div>
+  <div class="side-status"><div class="online">● Device connected</div><p>ESP32D-GW-0042<br/>Firmware 1.0.8</p></div>
+</aside>
+<main class="main">
+<header class="topbar"><div><h2>Device Engineering Studio</h2><div class="crumb">Devices / ESP32D-GW-0042 / Configure I/O</div></div><div class="top-actions"><button class="btn ghost">Discard</button><button class="btn primary" onclick="saveSetup()">Save Setup</button></div></header>
+<div class="content">
+  <div class="stepper">
+    <div class="step done"><b>✓</b><span>Select Board</span></div><div class="step active"><b>2</b><span>Configure I/O</span></div><div class="step"><b>3</b><span>Validate</span></div><div class="step"><b>4</b><span>Deploy</span></div>
+  </div>
+  <section class="hero-card">
+    <div class="board"><div class="board-icon">ESP<br/>32</div><div><h3>ESP32-WROOM-32 / ESP32D</h3><div style="color:#89a8b9;font-size:13px">30-pin board profile • Verified pin and capability map</div><div class="tags"><span class="tag ok">Profile verified</span><span class="tag">12 Analog</span><span class="tag">22 Digital</span><span class="tag">I²C</span><span class="tag">SPI</span><span class="tag">UART</span></div></div></div>
+    <div class="identity"><small>Device identity</small><strong>ESP32D-GW-0042</strong><small>USB Serial • Connected</small></div>
+  </section>
+  <div class="grid">
+    <div>
+      <section class="card">
+        <div class="card-head"><div><h3>Physical I/O Map</h3><p>Only supported and electrically valid functions are available.</p></div><span class="badge">6 of 22 configured</span></div>
+        <div class="card-body">
+          <div class="pin-row selected"><div class="pin-no">GPIO 34</div><div><b>Tank Level 1</b><small>Analog Input • Input-only pin</small></div><div class="pin-mode">4–20 mA via signal conditioner</div><div class="toggle on"></div></div>
+          <div class="pin-row"><div class="pin-no">GPIO 35</div><div><b>Pressure 1</b><small>Analog Input • Input-only pin</small></div><div class="pin-mode">0–10 bar</div><div class="toggle on"></div></div>
+          <div class="pin-row"><div class="pin-no">GPIO 32</div><div><b>Temperature 1</b><small>Analog Input</small></div><div class="pin-mode">0–10 V via divider</div><div class="toggle on"></div></div>
+          <div class="pin-row"><div class="pin-no">GPIO 25</div><div><b>Digital Output 1</b><small>Safe latched output</small></div><div class="pin-mode">Relay • Feedback enabled</div><div class="toggle on"></div></div>
+          <div class="pin-row"><div class="pin-no">GPIO 26</div><div><b>Digital Output 2</b><small>Safe latched output</small></div><div class="pin-mode">Relay • Feedback enabled</div><div class="toggle on"></div></div>
+          <div class="pin-row"><div class="pin-no">GPIO 27</div><div><b>Unused</b><small>Digital / PWM capable</small></div><div class="pin-mode">Not assigned</div><div class="toggle"></div></div>
+          <div class="notice"><b>Hardware rule:</b> GPIO 34 is input-only and cannot be configured as an output. The selected 4–20 mA transmitter requires a compatible signal conditioner before connection.</div>
+        </div>
+      </section>
+      <section class="card" style="margin-top:20px">
+        <div class="card-head"><div><h3>Analog Channel Configuration</h3><p>GPIO 34 • Tank Level 1</p></div><span class="badge">Tank Level</span></div>
+        <div class="card-body">
+          <div class="form-grid">
+            <div class="field"><label>Channel name</label><input value="Raw Water Tank 1" /></div>
+            <div class="field"><label>Application</label><select><option>Tank Level</option><option>Pressure</option><option>Flow</option><option>Temperature</option><option>Custom Analog</option></select></div>
+            <div class="field"><label>Sensor signal</label><select><option>4–20 mA</option><option>0–10 V</option><option>0–5 V</option><option>Ultrasonic</option><option>Custom range</option></select></div>
+            <div class="field"><label>Engineering unit</label><select><option>Litres (L)</option><option>Cubic metres (m³)</option><option>Percent (%)</option><option>Millimetres (mm)</option></select></div>
+          </div>
+          <div class="section-title">Select tank shape</div>
+          <div class="shape-list">
+            <div class="shape active" onclick="chooseShape(this,'Vertical Cylinder')"><div class="shape-icon">◉</div><span>Vertical Cylinder</span></div>
+            <div class="shape" onclick="chooseShape(this,'Horizontal Cylinder')"><div class="shape-icon">▰</div><span>Horizontal Cylinder</span></div>
+            <div class="shape" onclick="chooseShape(this,'Rectangular Tank')"><div class="shape-icon">▣</div><span>Rectangular Tank</span></div>
+            <div class="shape" onclick="chooseShape(this,'Conical Bottom')"><div class="shape-icon">▽</div><span>Conical Bottom</span></div>
+            <div class="shape" onclick="chooseShape(this,'Cylinder + Cone')"><div class="shape-icon">♙</div><span>Cylinder + Cone</span></div>
+            <div class="shape" onclick="chooseShape(this,'Custom Calibration')"><div class="shape-icon">⌁</div><span>Custom / Strapping Table</span></div>
+          </div>
+          <div class="section-title">Tank dimensions</div>
+          <div class="form-grid">
+            <div class="field"><label>Tank height</label><input value="3000" /></div><div class="field"><label>Height unit</label><select><option>mm</option><option>cm</option><option>m</option></select></div>
+            <div class="field"><label>Internal diameter</label><input value="2200" /></div><div class="field"><label>Calculated capacity</label><input value="11 404 L" disabled /></div>
+          </div>
+          <div class="section-title">Sensor calibration</div>
+          <div class="form-grid">
+            <div class="field"><label>Sensor minimum</label><input value="4.00 mA" /></div><div class="field"><label>Sensor maximum</label><input value="20.00 mA" /></div>
+            <div class="field"><label>Empty level</label><input value="0 mm" /></div><div class="field"><label>Full level</label><input value="3000 mm" /></div>
+            <div class="field"><label>Offset</label><input value="0 mm" /></div><div class="field"><label>Reading direction</label><select><option>Normal: low = empty</option><option>Inverted: high = empty</option></select></div>
+          </div>
+          <div class="section-title">Alarm thresholds</div>
+          <div class="thresholds"><label><small>Low-Low</small><input value="10%"></label><label><small>Low</small><input value="20%"></label><label><small>High</small><input value="85%"></label><label><small>High-High</small><input value="95%"></label></div>
+          <details class="advanced"><summary>Advanced settings</summary><div>Filtering, deadband, sampling interval, sensor fault detection and custom linearisation will appear here.</div></details>
+        </div>
+      </section>
+    </div>
+    <div>
+      <section class="card preview-card">
+        <div class="card-head"><div><h3>Live Asset Preview</h3><p id="shapeName">Vertical Cylinder • Raw Water Tank 1</p></div><span class="badge status-good">Signal Healthy</span></div>
+        <div class="preview-wrap"><div class="tank-stage vertical" id="tankStage"><div class="shape-caption" id="shapeCaption">Vertical Cylinder</div><div class="tank-shell"><div class="liquid" id="liquid"></div><div class="level-label"><div><strong id="percent">67%</strong><small id="volume">7 641 L</small></div></div></div><div class="tank-feet"><i></i><i></i></div></div></div>
+        <div class="preview-meta"><div class="metric"><small>Raw signal</small><strong id="signal">14.72 mA</strong></div><div class="metric"><small>Level</small><strong id="height">2010 mm</strong></div><div class="metric"><small>Status</small><strong class="status-good">Normal</strong></div></div>
+        <div class="sliderbox"><label><span>Simulate sensor input</span><b id="sliderVal">67%</b></label><input type="range" min="0" max="100" value="67" oninput="updateLevel(this.value)"></div>
+        <div class="card-body calc"><div class="calc-row"><span>Tank shape</span><strong id="calcShape">Vertical Cylinder</strong></div><div class="calc-row"><span>Dimensions</span><strong>Ø 2200 × 3000 mm</strong></div><div class="calc-row"><span>Total capacity</span><strong>11 404 L</strong></div><div class="calc-row"><span>Current volume</span><strong id="calcVolume">7 641 L</strong></div><div class="calc-row"><span>Linked monitoring visual</span><strong style="color:var(--cyan)">Tank / Vertical / Blue</strong></div></div>
+      </section>
+    </div>
+  </div>
+</div>
+</main>
+</div>
+<div class="toast" id="toast">✓ Device setup saved successfully • Ready for deployment</div>
+<script>
+function updateLevel(v){
+ document.getElementById('liquid').style.height=v+'%'; document.getElementById('percent').textContent=v+'%'; document.getElementById('sliderVal').textContent=v+'%';
+ const cap=11404, vol=Math.round(cap*v/100), mm=Math.round(3000*v/100), ma=(4+16*v/100).toFixed(2);
+ const nice=vol.toLocaleString('en-ZA')+' L'; document.getElementById('volume').textContent=nice; document.getElementById('calcVolume').textContent=nice; document.getElementById('height').textContent=mm+' mm'; document.getElementById('signal').textContent=ma+' mA';
+}
+function chooseShape(el,name){
+ document.querySelectorAll('.shape').forEach(x=>x.classList.remove('active')); el.classList.add('active');
+ const classMap={'Vertical Cylinder':'vertical','Horizontal Cylinder':'horizontal','Rectangular Tank':'rectangular','Conical Bottom':'conical','Cylinder + Cone':'combo','Custom Calibration':'custom'};
+ const stage=document.getElementById('tankStage'); stage.className='tank-stage '+classMap[name];
+ document.getElementById('shapeCaption').textContent=name;
+ document.getElementById('shapeName').textContent=name+' • Raw Water Tank 1';
+ document.getElementById('calcShape').textContent=name;
+}
+document.querySelectorAll('.toggle').forEach(t=>t.onclick=()=>t.classList.toggle('on'));
+function saveSetup(){const t=document.getElementById('toast');t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2600)}
+</script>
+</body>
+</html>
