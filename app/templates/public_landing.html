@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{{ page.title }}</title>
+  <meta name="description" content="{{ page.description }}">
+  <meta name="robots" content="index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1">
+  <link rel="canonical" href="{{ site_url }}{{ page.path }}">
+  <meta property="og:type" content="website"><meta property="og:site_name" content="AssetTrack 360">
+  <meta property="og:title" content="{{ page.title }}"><meta property="og:description" content="{{ page.description }}">
+  <meta property="og:url" content="{{ site_url }}{{ page.path }}"><meta property="og:image" content="{{ site_url }}/static/assettrack360-social-card.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <script type="application/ld+json">{{ schema|tojson }}</script>
+  {% if page.faq %}<script type="application/ld+json">{{ faq_schema|tojson }}</script>{% endif %}
+  <style>
+  :root{--bg:#06131f;--panel:#0d2941;--line:#28526a;--cyan:#00c8e8;--lime:#a4d92f;--text:#eef9fd;--muted:#95afbc;--max:1180px}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Segoe UI,Arial,sans-serif}a{color:inherit;text-decoration:none}.wrap{width:min(var(--max),calc(100% - 36px));margin:auto}.nav{height:76px;border-bottom:1px solid #193a4e;background:#071725;display:flex;align-items:center}.nav .wrap{display:flex;align-items:center;justify-content:space-between}.brand{font-size:24px;font-weight:900}.brand b{color:var(--cyan)}.links{display:flex;gap:22px;color:#aac3ce;font-size:13px}.btn{display:inline-flex;padding:13px 18px;border:1px solid var(--line);border-radius:11px;background:#102e45;font-weight:850}.btn.primary{background:var(--cyan);color:#00151c;border-color:var(--cyan)}.hero{padding:105px 0 80px;background:radial-gradient(circle at 80% 10%,rgba(0,200,232,.16),transparent 31%)}.eyebrow{font-size:11px;letter-spacing:2.3px;color:var(--cyan);font-weight:900}.hero h1{font-size:clamp(43px,6vw,74px);line-height:1.02;letter-spacing:-3px;max-width:900px;margin:16px 0}.hero p{font-size:19px;line-height:1.7;color:#adc5cf;max-width:780px}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:27px}.features,.faq{padding:78px 0}.section-head{max-width:750px;margin-bottom:35px}.section-head h2{font-size:42px;letter-spacing:-1.8px;margin:10px 0}.section-head p{color:var(--muted);line-height:1.65}.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.card{padding:23px;border:1px solid var(--line);border-radius:17px;background:linear-gradient(150deg,var(--panel),#081d2d)}.card h3{margin:0 0 8px}.card p{color:var(--muted);line-height:1.6;margin:0}.proof{padding:28px;border:1px solid #2d667d;background:#0b2b40;border-radius:20px;margin-top:35px;display:flex;justify-content:space-between;gap:25px;align-items:center}.proof p{margin:4px 0;color:var(--muted)}.faq-item{border-top:1px solid #245067;padding:21px 0}.faq-item h3{margin:0 0 8px}.faq-item p{margin:0;color:var(--muted);line-height:1.65}.footer{padding:30px 0;border-top:1px solid #17384a;color:#7897a5;font-size:11px}.footer .wrap{display:flex;justify-content:space-between}@media(max-width:760px){.links{display:none}.grid{grid-template-columns:1fr}.proof{display:block}.proof .btn{margin-top:18px}.footer .wrap{display:block}.hero{padding-top:80px}}
+  </style>
+</head>
+<body>
+<header class="nav"><div class="wrap"><a class="brand" href="/">AssetTrack <b>360</b></a><nav class="links"><a href="/fleet-tracking-south-africa">Fleet Tracking</a><a href="/mobile-phone-tracking">Mobile Tracker</a><a href="/asset-monitoring">Asset Monitoring</a><a href="/security-privacy">Security</a></nav><a class="btn" href="/login">Customer Login</a></div></header>
+<main>
+<section class="hero"><div class="wrap"><span class="eyebrow">{{ page.eyebrow }}</span><h1>{{ page.heading }}</h1><p>{{ page.intro }}</p><div class="actions"><a class="btn primary" href="/register">Start 72-Hour Trial →</a><a class="btn" href="/devices/connect">Connect a Device</a></div></div></section>
+<section class="features"><div class="wrap"><div class="section-head"><span class="eyebrow">PRACTICAL CAPABILITIES</span><h2>Built for operational visibility, not dashboard clutter.</h2><p>AssetTrack 360 combines a secure tracking API, customer-isolated workspaces and clear asset context.</p></div><div class="grid">{% for title, description in page.features %}<article class="card"><h3>{{ title }}</h3><p>{{ description }}</p></article>{% endfor %}</div><div class="proof"><div><b>Primary search topic</b><p>{{ page.primary_keyword }}</p></div><a class="btn primary" href="/register">Create Customer Workspace →</a></div></div></section>
+{% if page.faq %}<section class="faq"><div class="wrap"><div class="section-head"><span class="eyebrow">FREQUENTLY ASKED QUESTIONS</span><h2>Clear answers before the first pilot.</h2></div>{% for question, answer in page.faq %}<article class="faq-item"><h3>{{ question }}</h3><p>{{ answer }}</p></article>{% endfor %}</div></section>{% endif %}
+</main>
+<footer class="footer"><div class="wrap"><span>AssetTrack 360 · Secure asset monitoring and tracking</span><span>Copyright: © 2026 JP Van Wyk. All rights reserved.</span></div></footer>
+</body></html>

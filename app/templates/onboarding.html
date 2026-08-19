@@ -1,0 +1,90 @@
+{% extends 'base.html' %}
+{% block title %}Add Asset | AssetTrack 360{% endblock %}
+{% block head_extra %}
+<style>
+.onboard{max-width:1180px;margin:auto}.onboard h1{font-size:44px;margin:10px 0 6px}.lead{color:#91b2c2;margin:0 0 22px}.grid{display:grid;grid-template-columns:1.35fr .65fr;gap:16px}.panel{background:linear-gradient(155deg,var(--card),#0b2236);border:1px solid var(--line);border-radius:20px;padding:25px}.field-label{display:block;color:#aed5e3;font-size:11px;font-weight:800;margin:18px 0 7px}.text-input,.site-fields select,.tank-grid select{width:100%;background:#061b29;color:white;border:1px solid #34708d;border-radius:11px;padding:14px}.types{display:grid;grid-template-columns:repeat(3,1fr);gap:11px}.type{display:flex;gap:10px;background:#071e2d;border:1px solid #2b607a;border-radius:14px;padding:16px;cursor:pointer;min-height:126px}.type:has(input:checked){border:2px solid var(--cyan);background:#092b3e}.type input{margin-top:3px}.type-title{display:block;font-weight:800}.type-help{display:block;color:#91bfd0;font-size:12px;line-height:1.45;margin-top:6px}.solution-badge{display:inline-block;margin-top:8px;padding:3px 7px;border:1px solid #2d6d88;border-radius:999px;color:#91d8ef;font-size:10px}.tank-fields{display:none;margin-top:17px;border:1px solid #2a677e;background:#071d2b;border-radius:14px;padding:16px}.tank-fields.open{display:block}.tank-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.advanced{margin-top:17px;border:1px solid #2a5770;background:#071d2b;border-radius:14px;overflow:hidden}.advanced-head{padding:14px 16px;display:flex;gap:10px;align-items:center;cursor:pointer}.advanced-head input{width:18px;height:18px}.advanced-head small{color:#8fb2c4}.site-fields{display:none;padding:0 16px 16px;grid-template-columns:1fr 1fr;gap:9px}.advanced.open .site-fields{display:grid}.default-note{margin-top:14px;border-left:4px solid #9bd326;background:#08283a;border-radius:9px;padding:12px;color:#cfe6ef;font-size:12px;line-height:1.5}.steps div{padding:14px 0;border-top:1px solid #21445a}.steps div:first-child{border:0}.steps small{color:#a4c3d1;line-height:1.5}.primary{width:100%;margin-top:18px}.summary{margin-top:16px;padding:14px;border:1px solid #286079;border-radius:12px;background:#061b29}.summary b{color:#dcecf3}.summary span{color:#55d9f4}.hint{color:#76a8bc;font-size:11px;margin-top:6px}@media(max-width:950px){.types{grid-template-columns:1fr 1fr}}@media(max-width:800px){.grid,.types,.advanced.open .site-fields,.tank-grid{grid-template-columns:1fr}.onboard h1{font-size:36px}}
+.visual-picker{margin-top:18px}.visual-picker.hidden{display:none}.visual-options{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}.visual-card{position:relative;display:flex;flex-direction:column;gap:6px;min-height:112px;padding:14px;background:#071e2d;border:1px solid #2b607a;border-radius:14px;cursor:pointer}.visual-card:has(input:checked){border:2px solid var(--lime);background:#0b3042}.visual-card input{position:absolute;opacity:0}.visual-card b{font-size:13px}.visual-card small{color:#91bfd0;font-size:10px;line-height:1.35}.visual-icon{font-size:25px;color:var(--cyan)}@media(max-width:950px){.visual-options{grid-template-columns:repeat(2,1fr)}}@media(max-width:600px){.visual-options{grid-template-columns:1fr}}</style>
+{% endblock %}
+{% block body %}
+<div class="onboard">
+  <span class="eyebrow">QUICK ASSET SETUP</span>
+  <h1>Add an Asset</h1>
+  <p class="lead">First choose what must be monitored. The physical board is selected on the next screen.</p>
+  <div class="grid">
+    <form class="panel" method="post">
+      <h2>What would you like to monitor?</h2>
+      <label class="field-label">ASSET NAME</label>
+      <input class="text-input" name="asset_name" required maxlength="120" placeholder="Example: Thaba Tank">
+
+      <label class="field-label">SOLUTION PROFILE</label>
+      <div class="types">
+        <label class="type"><input type="radio" name="asset_type" value="TANK" data-solution="TANK_MONITORING" checked><span><span class="type-title">Tank Monitoring</span><span class="type-help">Tank level, volume, capacity, calibration and level alarms.</span><span class="solution-badge">TANK</span></span></label>
+        <label class="type"><input type="radio" name="asset_type" value="TRACKER" data-solution="VEHICLE_FLEET_TRACKING"><span><span class="type-title">Vehicle / Fleet Tracking</span><span class="type-help">GPS location, movement, routes, stops and tracking history.</span><span class="solution-badge">TRACKER</span></span></label>
+        <label class="type"><input type="radio" name="asset_type" value="VIBRATION" data-solution="MACHINE_MONITORING"><span><span class="type-title">Machine Monitoring</span><span class="type-help">Machine condition, vibration, temperature and operating state.</span><span class="solution-badge">MACHINE</span></span></label>
+        <label class="type"><input type="radio" name="asset_type" value="VIBRATION" data-solution="PUMP_MONITORING"><span><span class="type-title">Pump Monitoring</span><span class="type-help">Pump condition, run state, vibration, temperature and alarms.</span><span class="solution-badge">PUMP</span></span></label>
+        <label class="type"><input type="radio" name="asset_type" value="VIBRATION" data-solution="MOTOR_MONITORING"><span><span class="type-title">Motor Monitoring</span><span class="type-help">Motor condition, run state, vibration and temperature.</span><span class="solution-badge">MOTOR</span></span></label>
+        <label class="type"><input type="radio" name="asset_type" value="GENERIC" data-solution="GENERIC_IO"><span><span class="type-title">Generic I/O</span><span class="type-help">Analog inputs, digital I/O, pulse counters, PLC, OPC and gateway values.</span><span class="solution-badge">GENERIC</span></span></label>
+      </div>
+      <div class="visual-picker" id="visualPicker">
+        <label class="field-label">MONITORING VISUAL</label>
+        <div class="visual-options">
+          <label class="visual-card"><input type="radio" name="monitoring_visual" value="EASY_TANK" checked><span class="visual-icon">▥</span><b>Easy Tank</b><small>Simple level and volume display.</small></label>
+          <label class="visual-card"><input type="radio" name="monitoring_visual" value="POINT_TANK"><span class="visual-icon">◇</span><b>Point Tank</b><small>Uses the existing measured strapping points.</small></label>
+          <label class="visual-card"><input type="radio" name="monitoring_visual" value="ROUND_TANK"><span class="visual-icon">◉</span><b>Round Tank</b><small>Horizontal round tank presentation.</small></label>
+          <label class="visual-card"><input type="radio" name="monitoring_visual" value="TEMPERATURE"><span class="visual-icon">♨</span><b>Temperature</b><small>Calibrated temperature monitoring.</small></label>
+          <label class="visual-card"><input type="radio" name="monitoring_visual" value="FLOW"><span class="visual-icon">≈</span><b>Flow</b><small>Instantaneous flow-rate monitoring.</small></label>
+          <label class="visual-card"><input type="radio" name="monitoring_visual" value="PRESSURE"><span class="visual-icon">◴</span><b>Pressure</b><small>Pressure value and alarm display.</small></label>
+          <label class="visual-card"><input type="radio" name="monitoring_visual" value="GENERAL_MONITORING"><span class="visual-icon">▦</span><b>General Monitoring</b><small>User-named calibrated engineering value.</small></label>
+          <label class="visual-card"><input type="radio" name="monitoring_visual" value="FLOW_TOTALIZER"><span class="visual-icon">Σ</span><b>Flow Totalizer</b><small>Accumulated monitored volume.</small></label>
+          <label class="visual-card"><input type="radio" name="monitoring_visual" value="STATUS_INDICATOR"><span class="visual-icon">●</span><b>Status Indicator</b><small>Read-only digital state display.</small></label>
+          <label class="visual-card"><input type="radio" name="monitoring_visual" value="LIVE_TREND"><span class="visual-icon">⌁</span><b>Live Trend</b><small>Live and retained signal history.</small></label>
+        </div>
+      </div>
+      <input type="hidden" id="primary_solution_profile" name="primary_solution_profile" value="TANK_MONITORING">
+
+      <div class="tank-fields open" id="tankFields">
+        <b>Tank setup</b>
+        <div class="tank-grid">
+          <div><label class="field-label">CAPACITY</label><input class="text-input" name="capacity" id="capacity" type="number" min="0.01" step="0.01" placeholder="Example: 5000"></div>
+          <div><label class="field-label">CAPACITY UNIT</label><select name="capacity_unit"><option value="L">Litres (L)</option><option value="kL">Kilolitres (kL)</option><option value="m3">Cubic metres (m³)</option></select></div>
+          <div><label class="field-label">TANK SHAPE</label><select name="tank_shape"><option value="VERTICAL_CYLINDER">Vertical cylinder</option><option value="HORIZONTAL_CYLINDER">Horizontal cylinder</option><option value="RECTANGULAR">Rectangular</option><option value="CUSTOM_STRAPPING">Custom calibration table</option></select></div>
+          <div><label class="field-label">LEVEL SOURCE</label><select name="level_source"><option value="ANALOG_INPUT_1">Analog Input 1</option><option value="CUSTOM">Configure during commissioning</option></select></div>
+        </div>
+      </div>
+
+      <div class="advanced" id="advanced">
+        <label class="advanced-head"><input id="useSite" type="checkbox" name="use_site"><span><b>Assign this asset to a site</b><br><small>Optional for plants, depots, farms or branches</small></span></label>
+        <div class="site-fields"><div><label class="field-label">EXISTING SITE</label><select name="site_id"><option value="">Select an existing site</option>{% for site in sites %}{% if site.name|lower != 'my assets' %}<option value="{{ site.id }}">{{ site.name }}</option>{% endif %}{% endfor %}</select></div><div><label class="field-label">OR CREATE NEW SITE</label><input class="text-input" name="new_site_name" maxlength="120" placeholder="New site name"><input class="text-input" name="new_site_location" maxlength="180" placeholder="Location description" style="margin-top:8px"></div></div>
+      </div>
+
+      <div class="summary">Creating: <b id="summaryName">New asset</b> as <span id="summarySolution">Tank Monitoring</span>. Next: select and claim a compatible physical device.</div>
+      <div class="default-note"><b>Clear separation:</b> This screen creates the asset and selects the solution. The next screen only selects and connects the physical device.</div>
+      <button class="button primary">Create Asset &amp; Continue to Device →</button>
+    </form>
+
+    <aside class="panel"><h2>Simple setup journey</h2><div class="steps"><div><b>1. Create the asset</b><br><small>Name the real tank, vehicle, pump, motor or machine.</small></div><div><b>2. Choose one solution</b><br><small>The selected solution determines the correct dashboard and signals.</small></div><div><b>3. Select compatible hardware</b><br><small>The next screen filters ESP32-WROOM-32, ESP32-D, SIM808 or mobile tracking by capability.</small></div><div><b>4. Claim and verify</b><br><small>Connect Wi-Fi, claim the device and confirm live telemetry.</small></div></div></aside>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const box=document.getElementById('useSite'),panel=document.getElementById('advanced');
+const tankFields=document.getElementById('tankFields'),visualPicker=document.getElementById('visualPicker'),solutionInput=document.getElementById('primary_solution_profile');const visualInputs=[...document.querySelectorAll('[name="monitoring_visual"]')];
+const summarySolution=document.getElementById('summarySolution'),summaryName=document.getElementById('summaryName');
+const assetName=document.querySelector('[name="asset_name"]');
+function syncSite(){panel.classList.toggle('open',box.checked)}
+function syncSolution(){
+ const selected=document.querySelector('[name="asset_type"]:checked'),solution=selected.dataset.solution,isTank=selected.value==='TANK';
+ solutionInput.value=solution;
+ visualPicker.classList.toggle('hidden',!isTank);
+ visualInputs.forEach(input=>input.disabled=!isTank);
+ if(isTank&&!document.querySelector('[name="monitoring_visual"]:checked'))visualInputs.find(input=>input.value==='EASY_TANK').checked=true;
+ tankFields.classList.toggle('open',isTank);
+ document.getElementById('capacity').required=isTank;
+ tankFields.querySelectorAll('input,select').forEach(field=>field.disabled=!isTank);
+ summarySolution.textContent=selected.closest('.type').querySelector('.type-title').textContent;
+}
+function syncName(){summaryName.textContent=assetName.value.trim()||'New asset'}
+box.addEventListener('change',syncSite);document.querySelectorAll('[name="asset_type"]').forEach(x=>x.addEventListener('change',syncSolution));assetName.addEventListener('input',syncName);visualInputs.forEach(x=>x.addEventListener('change',syncSolution));syncSite();syncSolution();syncName();
+</script>
+{% endblock %}

@@ -1,0 +1,69 @@
+{% extends 'base.html' %}
+{% block title %}Devices | AssetTrack 360{% endblock %}
+{% block head_extra %}
+<style>
+.page{max-width:1200px;margin:auto}.head{display:flex;justify-content:space-between;align-items:end;gap:12px}.head-actions{display:flex;gap:10px;flex-wrap:wrap}.device-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-top:20px}.card{background:#102942;border:1px solid #28516a;border-radius:18px;padding:18px}.top{display:flex;justify-content:space-between;gap:12px}.top h3{margin:0}.top p{color:#8daab8}.state{font-size:9px;font-weight:900;color:#a4d92f}.state.off{color:#ff8b9b}.state.stale{color:#ffbf5e}.presence-note{margin-top:5px;color:#7897a6;font-size:8px}.facts{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:14px 0}.fact{padding:10px;background:#071b2a;border-radius:9px}.fact small{display:block;color:#7796a6}.actions{display:flex;gap:8px;flex-wrap:wrap}.actions form{display:flex;flex:1}.actions button,.actions a{flex:1;padding:10px;border-radius:9px;border:1px solid #31566c;background:#122d45;color:white;text-align:center;text-decoration:none;font-weight:800}.actions .danger{border-color:#8d3342;color:#ff9aa8}.token{background:#12343c;border:1px solid #00c8e8;border-radius:13px;padding:15px;margin:16px 0}.claim{background:#0b3140;border:1px solid #a4d92f;border-radius:16px;padding:18px;margin:16px 0}.claim-code{font:900 30px monospace;letter-spacing:2px;color:#dfff8a;background:#061b25;border-radius:10px;padding:13px;text-align:center}.claim-meta{display:flex;gap:12px;flex-wrap:wrap;color:#9dc1cf;margin:10px 0}.claim-state{font-weight:900;color:#a4d92f}.token input{width:100%;background:#071724;color:white;border:1px solid #31566c;padding:10px;border-radius:8px;font-family:monospace}.delete-panel{margin-top:12px;padding:13px;background:#1b1720;border:1px solid #70404c;border-radius:12px}.delete-panel p{color:#d2a3ad;font-size:11px}.delete-grid{display:grid;grid-template-columns:1fr 120px auto;gap:8px}.delete-grid input{min-width:0;padding:9px;border-radius:8px;border:1px solid #70404c;background:#071724;color:white}.delete-grid button{padding:9px 12px;border-radius:8px;border:1px solid #a34254;background:#3b1720;color:#ffb1bd;font-weight:900}@media(max-width:750px){.device-grid{grid-template-columns:1fr}.head{display:block}.head-actions{margin-top:12px}.delete-grid{grid-template-columns:1fr}}
+</style>
+{% endblock %}
+{% block body %}
+<div class="page">
+  <div class="head">
+    <div><span class="eyebrow">DEVICE FLEET</span><h1>Device Registry</h1></div>
+    <div class="head-actions"><a class="button" href="/devices/connect">+ Connect Device</a><a class="button" href="/onboarding">+ Add Asset</a></div>
+  </div>
+  {% if new_token %}<div class="token"><b>One-time API token for device {{new_token_device}}</b><p>Copy now. This value is hidden after leaving this page.</p><input readonly value="{{new_token}}"></div>{% endif %}
+  {% if hardware_claim %}
+  <section class="claim" id="hardware-claim" data-registration-id="{{hardware_claim.registration_id}}" data-remaining="{{hardware_claim.remaining_seconds}}">
+    <span class="eyebrow">LOCAL BOARD ONBOARDING</span><h2>Enter this Claim Code on the board</h2>
+    <div class="claim-code">{{hardware_claim.code}}</div>
+    <div class="claim-meta"><span>Asset: <b>{{hardware_claim.asset_name}}</b></span><span>Profile: <b>{{hardware_claim.profile_code}}</b></span><span>Expires in: <b id="claim-countdown">--:--</b></span></div>
+    <p>The customer enters only this short code on the WROOM or ESP32-D local setup page. AssetTrack 360 sends the UID and secret token directly to the board. The code works once and expires after 10 minutes.</p>
+    <div class="claim-state" id="claim-state">Waiting for the board...</div>
+  </section>
+  {% endif %}
+  <p style="color:#7897a6;font-size:10px;margin-top:14px">Hardware: ONLINE ≤ 90 s · STALE 91–180 s · OFFLINE &gt; 180 s. Desktop simulation does not update physical presence.</p><div class="device-grid">
+  {% for item in items %}
+    <article class="card">
+      <div class="top"><div><h3>{{item.device.device_uid}}</h3><p>{{item.asset.name if item.asset else 'Unassigned hardware'}} · {{item.profile.display_name}}</p></div><div style="text-align:right"><span class="state {{'stale' if item.presence_state=='STALE' else '' if item.presence_state=='ONLINE' else 'off'}}">{{item.presence_state}}</span><div class="presence-note">Physical device</div></div></div>
+      <div class="facts"><div class="fact"><small>FIRMWARE</small><b>{{item.device.firmware or 'Not reported'}}</b></div><div class="fact"><small>LAST PHYSICAL CONTACT</small><b>{{item.last_contact}}</b></div><div class="fact"><small>STATE</small><b>{{'Enabled' if item.device.active else 'Disabled'}}</b></div><div class="fact"><small>ASSET TYPE</small><b>{{item.asset.asset_type if item.asset else 'UNASSIGNED'}}</b></div><div class="fact"><small>TRANSPORT</small><b>{{item.profile.transport}}</b></div><div class="fact"><small>PROFILE</small><b>{{item.profile.code}}</b></div><div class="fact"><small>BOARD FAMILY</small><b>{{'SIM808 SAMD21' if item.device.device_type in ('SIM808_GPS_TRACKER','SIM808_SAMD21') else item.profile.display_name}}</b></div></div>
+      <div class="actions">
+        {% if item.asset %}<a href="/asset/{{item.asset.id}}">Open Asset</a>{% endif %}{% if item.profile.code != 'LEGACY' or item.device.device_type in ('MOBILE_WEB_TRACKER','ANDROID_MOBILE_TRACKER','MOBILE_TRACKER','IOS_MOBILE_TRACKER') %}<a href="/devices/{{item.device.id}}/io-studio">Signals & I/O</a><a href="/devices/{{item.device.id}}/trends-limits">Trends & Limits</a>{% endif %}
+        {% if item.device.device_type in ('MOBILE_WEB_TRACKER','ANDROID_MOBILE_TRACKER','MOBILE_TRACKER') %}
+        <form method="post" action="/devices/{{item.device.id}}/replace-phone"><button onclick="return confirm('Replace this phone? The old token will be revoked and asset history retained.')">Replace Phone</button></form>
+        {% else %}
+        <form method="post" action="/devices/{{item.device.id}}/rotate-token"><button onclick="return confirm('Rotate this device token? The old token will stop working immediately.')">Rotate Token</button></form>
+        {% endif %}
+        <form method="post" action="/devices/{{item.device.id}}/toggle"><button>{{'Disable' if item.device.active else 'Enable'}}</button></form>
+      </div>
+      {% if not item.device.active %}
+      <div class="delete-panel">
+        <b>Permanently Delete Device</b>
+        <p>This removes the disabled device identity and token. The linked asset remains available for a replacement device.</p>
+        <form method="post" action="/devices/{{item.device.id}}/delete">
+          <button class="danger" type="submit" onclick="return confirm('Permanently delete device {{item.device.device_uid}}? The asset will be retained. This cannot be undone.')">Delete Device Permanently</button>
+        </form>
+      </div>
+      {% endif %}
+    </article>
+  {% else %}<p>No registered devices.</p>{% endfor %}
+  </div>
+</div>
+<script>
+(function(){
+ const claim=document.getElementById('hardware-claim');
+ if(!claim){window.setTimeout(()=>window.location.reload(),15000);return;}
+ let remaining=Number(claim.dataset.remaining||0);const countdown=document.getElementById('claim-countdown');const state=document.getElementById('claim-state');
+ function tick(){const m=Math.floor(remaining/60),s=remaining%60;countdown.textContent=String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');if(remaining>0)remaining--;else state.textContent='Claim code expired. Generate a new code from Connect Device.';}
+ tick();window.setInterval(tick,1000);
+ async function poll(){
+  try{const response=await fetch('/api/v1/hardware-claim/status/'+claim.dataset.registrationId,{cache:'no-store'});const data=await response.json();
+   if(data.state==='CLAIMED'){state.textContent='Device claimed successfully: '+data.device_uid;window.setTimeout(()=>window.location.reload(),1500);return;}
+   if(data.state==='EXPIRED'){remaining=0;state.textContent='Claim code expired. Generate a new code.';return;}
+   if(typeof data.remaining_seconds==='number')remaining=data.remaining_seconds;
+  }catch(error){state.textContent='Waiting for board. Status check will retry.';}
+  window.setTimeout(poll,2000);
+ }
+ poll();
+})();
+</script>
+{% endblock %}
