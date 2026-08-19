@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: assettrack360-rev12
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn -w 1 -b 0.0.0.0:$PORT app:app
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.4
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: assettrack360-db
+          property: connectionString
+      - key: COOKIE_SECURE
+        value: "true"
+databases:
+  - name: assettrack360-db
+    plan: free
