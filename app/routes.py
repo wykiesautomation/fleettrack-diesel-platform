@@ -1142,7 +1142,28 @@ def asset_view(asset_id):
             signal_calibration=dict((level_signal.config_json or {}).get('tank_calibration') or {}) if level_signal else {}
             tank_orientation=str(signal_calibration.get('orientation') or asset_meta.get('tank_shape') or 'VERTICAL_CYLINDER').upper()
         if tank_orientation not in valid_tank_orientations:tank_orientation='VERTICAL_CYLINDER'
-    return render_template('asset.html',asset=asset,signal_cards=cards,signal_lookup=lookup,chart_series=series,alarms=alarms,open_alarms=open_alarms,device=device,location=location,route_points=route,last_contact=last,generated_at=now,context=ctx,tank_stats=tank,tracking_stats=track,vibration_stats=vib,phone_battery=phone_battery,vehicle_summary=vehicle_summary,route_health=route_health,output_command=output_command,device_profile=device_profile,last_known_address=last_known_address,operational_battery=operational_battery,trend_policy=active_trend_policy,tank_orientation=tank_orientation,monitoring_visual=(asset.metadata_json or {}).get('monitoring_visual','EASY_TANK' if asset.asset_type=='TANK' else 'GENERAL_MONITORING'),visual_signal_candidates=visual_signal_candidates,primary_visual_signal=primary_visual_signal,primary_visual_card=primary_visual_card,primary_trend_selected=primary_trend_selected,primary_trend_points=primary_trend_points,has_location_capability=has_location_capability,valid_location=valid_location,output_feedback_verified=output_feedback_verified)
+    # Shared asset connectivity truth for header, tracker summary and output safety.
+    contact_minutes=None
+    if device and device.last_seen:
+        contact_minutes=max(0,int((now-aware(device.last_seen)).total_seconds()//60))
+    if not device or not device.last_seen:
+        connectivity_state='NEVER_SEEN'
+    elif contact_minutes<=5:
+        connectivity_state='ONLINE'
+    elif contact_minutes<=15:
+        connectivity_state='DELAYED'
+    elif contact_minutes<=30:
+        connectivity_state='STALE'
+    else:
+        connectivity_state='OFFLINE'
+    asset_connectivity={
+        'state':connectivity_state,
+        'online':connectivity_state=='ONLINE',
+        'contact_minutes':contact_minutes,
+        'detail':('No contact received' if contact_minutes is None else ('Just now' if contact_minutes==0 else f'Last contact {contact_minutes} min ago')),
+    }
+    sim808_profile=bool(device and (device.device_type in ('SIM808_SAMD21','SIM808_TRACKER_2AI_2DO') or 'SIM808' in str(device.firmware_version or '').upper() or 'SIM808' in str(device_profile.get('code','')).upper()))
+    return render_template('asset.html',asset=asset,signal_cards=cards,signal_lookup=lookup,chart_series=series,alarms=alarms,open_alarms=open_alarms,device=device,location=location,route_points=route,last_contact=last,generated_at=now,context=ctx,tank_stats=tank,tracking_stats=track,vibration_stats=vib,phone_battery=phone_battery,vehicle_summary=vehicle_summary,route_health=route_health,output_command=output_command,device_profile=device_profile,last_known_address=last_known_address,operational_battery=operational_battery,trend_policy=active_trend_policy,tank_orientation=tank_orientation,monitoring_visual=(asset.metadata_json or {}).get('monitoring_visual','EASY_TANK' if asset.asset_type=='TANK' else 'GENERAL_MONITORING'),visual_signal_candidates=visual_signal_candidates,primary_visual_signal=primary_visual_signal,primary_visual_card=primary_visual_card,primary_trend_selected=primary_trend_selected,primary_trend_points=primary_trend_points,has_location_capability=has_location_capability,valid_location=valid_location,output_feedback_verified=output_feedback_verified,asset_connectivity=asset_connectivity,sim808_profile=sim808_profile)
 
 
 
