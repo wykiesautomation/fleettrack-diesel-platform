@@ -22,7 +22,7 @@
 #include <ESPmDNS.h>
 #include <mbedtls/sha256.h>
 
-const char *FW="1.6.4-wroom32-claim-feedback-fixed";
+const char *FW="1.6.5-wroom32-simulation-quality";
 const char *PROFILE_CODE="AT360_ESP32_WROOM32";
 const char *CLAIM_URL="https://assettrack360.wykiesautomation.co.za/api/v1/device/claim";
 const char *DEFAULT_USER="admin";
@@ -244,15 +244,15 @@ void printIo(){
 }
 void showCfg(){Serial.println("CONFIG_BEGIN");Serial.println("FIRMWARE|"+String(FW));Serial.println("DEVICE_UID|"+deviceUid);Serial.println("SSID|"+ssid);Serial.println("WIFI_PASSWORD|"+String(wifiPw.length()?"SET":"MISSING"));Serial.println("WIFI_STATUS|"+String(WiFi.status()==WL_CONNECTED?"ONLINE":"OFFLINE"));Serial.println("IP_ADDRESS|"+(WiFi.status()==WL_CONNECTED?WiFi.localIP().toString():"-"));Serial.println("RSSI|"+String(WiFi.status()==WL_CONNECTED?WiFi.RSSI():0));Serial.println("DEVICE_TOKEN|"+String(deviceToken.length()?"SET":"MISSING"));Serial.println("MODE|"+String(simulation?"Simulation":"Live"));Serial.println("CONFIG_END");printIo();}
 String telemetry(){
- float volts=simulation?simAnalogVolts:liveVolts();float percent=simulation?simAnalogPercent:livePercent();int digital=simulation?simDigital:(digitalRead(DIN)==LOW);uint32_t pulses=simulation?simPulses:pulseCount();int arm=simulation?simArm:armed();int out=simulation?simOutput:outputOn;
+ float volts=simulation?simAnalogVolts:liveVolts();float percent=simulation?simAnalogPercent:livePercent();int digital=simulation?simDigital:(digitalRead(DIN)==LOW);uint32_t pulses=simulation?simPulses:pulseCount();int arm=simulation?simArm:armed();int out=simulation?simOutput:outputOn;String quality=simulation?"SIMULATED":"GOOD";
  sequenceNo++;saveSeq();String uniqueSequence=macId()+"-"+String(sequenceNo);String j="{\"device_id\":\""+esc(deviceUid)+"\",\"sequence\":\""+uniqueSequence+"\",\"firmware\":\""+FW+"\",\"measurements\":[";
- j+="{\"point\":\"analog_1\",\"value\":"+String(percent,2)+",\"quality\":\"GOOD\"},";
- j+="{\"point\":\"analog_1_volts\",\"value\":"+String(volts,3)+",\"quality\":\"GOOD\"},";
- j+="{\"point\":\"digital_1\",\"value\":"+String(digital)+",\"quality\":\"GOOD\"},";
- j+="{\"point\":\"pulse_1_count\",\"value\":"+String(pulses)+",\"quality\":\"GOOD\"},";
- j+="{\"point\":\"local_arm_status\",\"value\":"+String(arm)+",\"quality\":\"GOOD\"},";
- j+="{\"point\":\"digital_output_1_feedback\",\"value\":"+String(out)+",\"quality\":\"GOOD\"},";
- j+="{\"point\":\"wifi_rssi\",\"value\":"+String(WiFi.status()==WL_CONNECTED?WiFi.RSSI():0)+",\"quality\":\"GOOD\"}]}";return j;
+ j+="{\"point\":\"analog_1\",\"value\":"+String(percent,2)+",\"quality\":\""+quality+"\"},";
+ j+="{\"point\":\"analog_1_volts\",\"value\":"+String(volts,3)+",\"quality\":\""+quality+"\"},";
+ j+="{\"point\":\"digital_1\",\"value\":"+String(digital)+",\"quality\":\""+quality+"\"},";
+ j+="{\"point\":\"pulse_1_count\",\"value\":"+String(pulses)+",\"quality\":\""+quality+"\"},";
+ j+="{\"point\":\"local_arm_status\",\"value\":"+String(arm)+",\"quality\":\""+quality+"\"},";
+ j+="{\"point\":\"digital_output_1_feedback\",\"value\":"+String(out)+",\"quality\":\""+quality+"\"},";
+ j+="{\"point\":\"wifi_rssi\",\"value\":"+String(WiFi.status()==WL_CONNECTED?WiFi.RSSI():0)+",\"quality\":\""+quality+"\"}]}";return j;
 }
 void sendTelemetry(){if(WiFi.status()!=WL_CONNECTED){Serial.println("SEND_BLOCKED|WIFI_OFFLINE");return;}if(!deviceToken.length()){Serial.println("SEND_BLOCKED|DEVICE_TOKEN_MISSING");return;}WiFiClientSecure c;c.setInsecure();HTTPClient h;if(!h.begin(c,INGEST_URL)){Serial.println("TELEMETRY_STATUS|-1");return;}h.addHeader("Content-Type","application/json");h.addHeader("Authorization","Bearer "+deviceToken);int code=h.POST(telemetry());String body=code>0?h.getString():"";h.end();Serial.println("TELEMETRY_STATUS|"+String(code));if(body.length())Serial.println("TELEMETRY_RESPONSE|"+body);}
 
