@@ -1,0 +1,36 @@
+name: AssetTrack 360 Keep Alive
+
+on:
+  schedule:
+    - cron: "3,13,23,33,43,53 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: assettrack360-render-keep-alive
+  cancel-in-progress: true
+
+jobs:
+  keep-alive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Wake service and verify health
+        shell: bash
+        env:
+          HEALTH_URL: https://assettrack360.wykiesautomation.co.za/health
+        run: |
+          set -eu
+          for attempt in 1 2 3 4 5 6; do
+            http_code=$(curl --location --silent --show-error --output response.txt --write-out "%{http_code}" --connect-timeout 30 --max-time 120 "${HEALTH_URL}" || true)
+            echo "Attempt ${attempt}: HTTP ${http_code}"
+            if [ "${http_code}" = "200" ] && grep -Eq '"status"[[:space:]]*:[[:space:]]*"ok"' response.txt; then
+              echo "AssetTrack 360 is healthy."
+              exit 0
+            fi
+            sleep 20
+          done
+          cat response.txt 2>/dev/null || true
+          exit 1

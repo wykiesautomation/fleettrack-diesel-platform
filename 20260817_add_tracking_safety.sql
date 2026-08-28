@@ -1,0 +1,3 @@
+-- Tracking safety configuration is stored safely in asset.metadata_json under tracking_safety.
+-- No destructive schema migration is required for this production-safe release.
+-- Keys: speed_limit_kmh, zones[{name,latitude,longitude,radius_m,rule}], updated_at, updated_by.

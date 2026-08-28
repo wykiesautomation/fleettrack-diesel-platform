@@ -1,0 +1,64 @@
+{% extends 'base.html' %}
+{% block title %}Connect Device | AssetTrack 360{% endblock %}
+{% block head_extra %}
+<style>
+.wrap{max-width:1100px;margin:auto}.steps{display:flex;gap:8px;margin:18px 0}.step{flex:1;padding:11px;border-radius:10px;background:#071b2a;color:var(--muted)}.step.on{border:1px solid var(--cyan);color:white}.panel{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:24px}.types{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.type{background:#071b2a;border:1px solid #28516a;border-radius:13px;padding:16px;cursor:pointer}.type:has(input:checked){border:2px solid var(--cyan);background:#0c3047}.type input{margin-right:8px}.field{margin-top:16px}.field label{display:block;color:var(--muted);font-size:11px;margin-bottom:6px}.field select,.field input{width:100%;padding:12px;background:#071724;border:1px solid #31566c;border-radius:9px;color:white;box-sizing:border-box}.new-fields{display:grid;grid-template-columns:1fr 1fr;gap:12px}.actions{display:flex;gap:9px;margin-top:22px}.hint{background:#082236;border-left:4px solid var(--cyan);padding:12px;border-radius:8px;margin-top:14px;color:#b9d3de}.hidden{display:none}@media(max-width:700px){.types,.new-fields{grid-template-columns:1fr}.steps{display:grid;grid-template-columns:1fr 1fr}}
+</style>
+{% endblock %}
+{% block body %}
+<div class="wrap">
+  <span class="eyebrow">DEVICE ONBOARDING CENTRE</span>
+  <h1>Connect a Device</h1>
+  <p>Choose Android onboarding or generate a secure one-time Claim Code for a supported hardware board.</p>
+  <div class="steps"><div class="step on">1 · Device</div><div class="step on">2 · Asset</div><div class="step">3 · Connect</div><div class="step">4 · Verify</div></div>
+  <form method="post" class="panel" id="connect-form">
+    <h2>What would you like to connect?</h2>
+    <div class="types">
+      <label class="type"><input type="radio" name="device_kind" value="ANDROID_PHONE" checked><b>Android Phone</b><br><small>QR registration for mobile tracking</small></label>
+      {% for profile in device_profiles %}<label class="type"><input type="radio" name="device_kind" value="HARDWARE_PROFILE" data-profile="{{profile.code}}"><b>{{profile.display_name}}</b><br><small>{{profile.transport}} · {{profile.capabilities|join(' · ')}}</small></label>{% endfor %}
+    </div>
+    <input type="hidden" name="profile_code" id="profile_code"><div id="device-uid-panel" class="field hidden">
+      <div class="hint"><b>Easy local-web onboarding</b><br>Select the hardware profile and asset. AssetTrack 360 will generate a one-time Claim Code valid for 10 minutes. Enter that short code on the board's local setup page. The board receives its Device UID and secret token automatically.</div>
+    </div>
+    <h2>Choose the asset</h2>
+    <label><input type="radio" name="asset_mode" value="existing"> Connect to an existing unassigned asset</label>
+    <div class="field"><label>EXISTING ASSET</label><select name="asset_id" id="existing_asset"><option value="">Select asset...</option>{% for asset in assets %}<option value="{{asset.id}}">{{asset.name}} · {{asset.asset_type}}</option>{% endfor %}</select></div>
+    <p><label><input type="radio" name="asset_mode" value="new" checked> Create a new asset</label></p>
+    <div class="new-fields"><div class="field"><label>NEW ASSET NAME</label><input name="asset_name" id="asset_name" placeholder="ESP32D Bench Test"></div><div class="field"><label>SITE</label><select name="site_id" id="site_id"><option value="">Select site...</option>{% for site in sites %}<option value="{{site.id}}">{{site.name}}</option>{% endfor %}</select></div></div>
+    {% if not sites %}<div class="hint">Create a site from Add Asset before creating a new device asset here.</div>{% endif %}
+    <div class="actions"><button class="button primary" id="submit-button">Create Android Registration Code</button><a class="button" href="{{ url_for('main.devices') }}">Cancel</a></div>
+  </form>
+</div>
+<script>
+(function(){
+ const radios=document.querySelectorAll('input[name="device_kind"]');
+ const panel=document.getElementById('device-uid-panel');
+  const button=document.getElementById('submit-button');
+ function update(){
+   const kind=document.querySelector('input[name="device_kind"]:checked').value;
+   const selected=document.querySelector('input[name="device_kind"]:checked');const esp=kind==='HARDWARE_PROFILE';document.getElementById('profile_code').value=esp?(selected.dataset.profile||''):'';
+   panel.classList.toggle('hidden',!esp);
+   uid.required=esp;
+   button.textContent=esp?'Generate 10-Minute Claim Code':kind==='ANDROID_PHONE'?'Create Android Registration Code':'Continue';
+ }
+ const assetModes=document.querySelectorAll('input[name="asset_mode"]');
+ const existingAsset=document.getElementById('existing_asset');
+ const assetName=document.getElementById('asset_name');
+ const siteId=document.getElementById('site_id');
+ function updateAssetMode(){
+   const mode=document.querySelector('input[name="asset_mode"]:checked')?.value||'new';
+   const creating=mode==='new';
+   existingAsset.disabled=creating;
+   existingAsset.required=!creating;
+   assetName.disabled=!creating;
+   siteId.disabled=!creating;
+   assetName.required=creating;
+   siteId.required=creating;
+ }
+ assetModes.forEach(r=>r.addEventListener('change',updateAssetMode));
+ assetName.addEventListener('input',()=>{if(assetName.value.trim()){document.querySelector('input[name="asset_mode"][value="new"]').checked=true;updateAssetMode();}});
+ existingAsset.addEventListener('change',()=>{if(existingAsset.value){document.querySelector('input[name="asset_mode"][value="existing"]').checked=true;updateAssetMode();}});
+ radios.forEach(r=>r.addEventListener('change',update));update();updateAssetMode();
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,50 @@
+{% extends 'base.html' %}
+{% block title %}Test Data Cleanup{% endblock %}
+{% block head_extra %}
+<style>
+.cleanup-head{margin-bottom:24px}.cleanup-head p{color:var(--muted);max-width:780px}.section{margin-top:26px}.section-title{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:12px}.count{padding:5px 10px;border:1px solid var(--line);border-radius:999px;color:#8ddcf4;font-size:.82rem}.grid{display:grid;gap:14px}.item{background:var(--card);padding:18px;border:1px solid var(--line);border-radius:16px;display:grid;grid-template-columns:1fr 2fr;gap:20px}.empty{background:var(--card);padding:18px;border:1px dashed #31566c;border-radius:16px;color:var(--muted)}.f input,.f select{width:100%;padding:11px;margin:5px 0;background:#071724;color:#fff;border:1px solid #31566c;border-radius:8px}.del{display:none;background:#df3f5c;color:#fff;border:0;padding:12px 18px;border-radius:9px;font-weight:900;cursor:pointer}.del.show{display:inline-block}.del:disabled{opacity:.6;cursor:not-allowed}.ok{color:var(--lime);font-weight:900}.msg{padding:9px 0;margin-top:8px}.err{color:#ff8298}.protected{padding:8px 10px;border-radius:8px;background:rgba(223,63,92,.12);border:1px solid rgba(223,63,92,.35)}.site-badge{color:#8ddcf4;font-weight:800}@media(max-width:800px){.item{grid-template-columns:1fr}}
+</style>
+{% endblock %}
+{% block body %}
+<div class="cleanup-head">
+  <h1>Test Data Cleanup</h1>
+  <p>Delete old assets first, then remove empty sites. A delete button appears only when the exact name and DELETE both match.</p>
+</div>
+
+<section class="section">
+  <div class="section-title"><h2>Assets</h2><span class="count">{{ items|length }} total</span></div>
+  <div class="grid">
+  {% for x in items %}
+    <article class="item" id="asset-{{x.asset.id}}">
+      <div><h3>{{x.asset.name}}</h3><small>Asset ID {{x.asset.id}} · {{x.devices}} devices · {{x.locations}} locations · {{x.readings}} readings · {{x.alarms}} alarms</small>{% if x.active_device %}<p class="err protected">Protected: active device assigned</p>{% endif %}</div>
+      <form class="f confirm-form" data-name="{{x.asset.name|e}}" data-endpoint="{{url_for('main.delete_test_asset')}}" data-label="asset">
+        <input type="hidden" name="asset_id" value="{{x.asset.id}}"><input type="hidden" name="action" value="delete_all">
+        <select name="cleanup_action"><option value="delete_all">Delete asset and all retained test history</option><option value="clear_history">Clear history only</option></select>
+        <input class="n" name="confirm_name" placeholder="Exact asset name" autocomplete="off"><input class="w" name="confirm_word" placeholder="DELETE" autocomplete="off">
+        {% if x.active_device %}<button type="button" disabled>Protected</button>{% else %}<div class="hint">Enter exact name and DELETE.</div><button class="del" type="submit">Delete Asset Permanently</button>{% endif %}<div class="msg"></div>
+      </form>
+    </article>
+  {% else %}<div class="empty">No assets remain. You can now delete the empty sites below.</div>{% endfor %}
+  </div>
+</section>
+
+<section class="section">
+  <div class="section-title"><h2>Sites</h2><span class="count">{{ site_items|length }} total</span></div>
+  <div class="grid">
+  {% for x in site_items %}
+    <article class="item" id="site-{{x.site.id}}">
+      <div><h3>{{x.site.name}}</h3><small>Site ID {{x.site.id}} · <span class="site-badge">{{x.asset_count}} assets</span>{% if x.site.location %} · {{x.site.location}}{% endif %}</small>{% if x.asset_count %}<p class="err protected">Protected: delete or move all assets from this site first.</p>{% endif %}</div>
+      <form class="f confirm-form" data-name="{{x.site.name|e}}" data-endpoint="{{url_for('main.delete_test_site')}}" data-label="site">
+        <input type="hidden" name="site_id" value="{{x.site.id}}"><input class="n" name="confirm_name" placeholder="Exact site name" autocomplete="off"><input class="w" name="confirm_word" placeholder="DELETE" autocomplete="off">
+        {% if x.asset_count %}<button type="button" disabled>Protected</button>{% else %}<div class="hint">Enter exact site name and DELETE.</div><button class="del" type="submit">Delete Site Permanently</button>{% endif %}<div class="msg"></div>
+      </form>
+    </article>
+  {% else %}<div class="empty">No sites remain. The customer workspace is ready for a clean new site.</div>{% endfor %}
+  </div>
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+document.querySelectorAll('.confirm-form').forEach(f=>{const n=f.querySelector('.n'),w=f.querySelector('.w'),b=f.querySelector('.del'),h=f.querySelector('.hint'),m=f.querySelector('.msg');if(!b)return;function validate(){const ok=n.value===f.dataset.name&&w.value.trim().toUpperCase()==='DELETE';b.classList.toggle('show',ok);h.className=ok?'hint ok':'hint';h.textContent=ok?'Confirmation matched. Delete unlocked.':'Enter exact '+f.dataset.label+' name and DELETE.'}n.oninput=w.oninput=validate;f.onsubmit=async e=>{e.preventDefault();validate();if(!b.classList.contains('show')||!confirm('Permanently delete '+f.dataset.label+' '+f.dataset.name+'?'))return;b.disabled=true;b.textContent='Deleting...';try{const r=await fetch(f.dataset.endpoint,{method:'POST',body:new FormData(f),credentials:'same-origin'});const d=await r.json().catch(()=>({}));if(!r.ok||!d.ok)throw Error(d.error||'HTTP '+r.status);m.className='msg ok';m.textContent=d.message;location.href='{{url_for("main.test_data_cleanup")}}?t='+Date.now()}catch(x){m.className='msg err';m.textContent='Delete failed: '+x.message;b.disabled=false;b.textContent=f.dataset.label==='site'?'Delete Site Permanently':'Delete Asset Permanently'}};validate()});
+</script>
+{% endblock %}
