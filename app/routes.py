@@ -902,6 +902,7 @@ def analyse_tracking_points(rows):
     segments = [accepted] if len(accepted) > 1 else []
     return {
         'points': accepted,
+        'last': (accepted[-1] if accepted else (strict['drift'][-1] if strict['drift'] else None)),
         'accepted': accepted,
         'rejected': rejected,
         'segments': segments,

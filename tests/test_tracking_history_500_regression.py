@@ -5,10 +5,11 @@ S=Path("app/templates/safety_twin.html").read_text(encoding="utf-8")
 
 def test_history_adapter_supplies_template_contract():
     block=R[R.index("def analyse_tracking_points"):R.index("def tracking_hmi_context")]
-    required={"points","accepted","rejected","segments","journeys","stops","total_km","distance_km","max_speed","moving_minutes","stopped_minutes","rejection_counts"}
+    required={"points","last","accepted","rejected","segments","journeys","stops","total_km","distance_km","max_speed","moving_minutes","stopped_minutes","rejection_counts"}
     for key in required:
         assert repr(key) in block
     assert "analysis['points']" in R
+    assert "analysis['last']" in R
     assert "analysis.points" in T
 
 def test_live_navigation_and_customer_title_remain_correct():
