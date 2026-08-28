@@ -3067,3 +3067,64 @@ def opc_ua_mapping_preview(connector_id):
     try:raw=float(request.form.get('raw_value'));scale=float(request.form.get('scale') or 1);offset=float(request.form.get('offset') or 0)
     except (TypeError,ValueError):return jsonify(ok=False,error='numeric_raw_scale_offset_required'),422
     return jsonify(ok=True,node_id=node_id,raw_value=raw,mapped_value=raw*scale+offset,read_only=True,persisted=False)
+
+# OPC UA Part 4: Edge Gateway Runtime and live data flow.
+@bp.get('/api/v1/edge/opc-ua/<int:connector_id>/runtime-config')
+def opc_ua_runtime_config(connector_id):
+    token=request.headers.get('Authorization','').removeprefix('Bearer ').strip();gateway=EdgeGateway.query.filter_by(api_token=token,active=True).first()
+    if not gateway:return jsonify(error='unauthorized'),401
+    connector=IntegrationConnector.query.filter_by(id=connector_id,customer_id=gateway.customer_id,connector_type='OPC_UA').first_or_404()
+    if connector.edge_gateway_id and connector.edge_gateway_id!=gateway.gateway_uid:return jsonify(error='gateway_mismatch'),403
+    if not connector.read_only:return jsonify(error='read_only_policy_required'),409
+    mappings=UniversalSourceMapping.query.filter_by(customer_id=gateway.customer_id,connector_id=connector.id,enabled=True).order_by(UniversalSourceMapping.id).all()
+    cfg=dict(connector.config_json or {});opc=cfg.get('opcua',{}) if isinstance(cfg,dict) else {}
+    return jsonify(ok=True,connector_id=connector.id,gateway_uid=gateway.gateway_uid,endpoint=connector.endpoint,read_only=True,allow_write=False,allow_methods=False,poll_interval_seconds=max(5,connector.poll_interval_seconds or 30),stale_seconds=max(30,int(opc.get('stale_seconds',120))),security={'policy':opc.get('security_policy','Basic256Sha256'),'mode':opc.get('security_mode','SignAndEncrypt'),'auth_mode':opc.get('auth_mode','ANONYMOUS'),'credential_ref':connector.credential_ref,'certificate_ref':opc.get('certificate_ref')},mappings=[{'mapping_id':m.id,'source_path':m.source_path,'data_type':m.data_type,'scale':m.scale,'offset':m.offset,'asset_id':m.asset_id,'signal_id':m.signal_id} for m in mappings])
+
+@bp.post('/api/v1/edge/opc-ua/live-batch')
+def opc_ua_live_batch():
+    token=request.headers.get('Authorization','').removeprefix('Bearer ').strip();gateway=EdgeGateway.query.filter_by(api_token=token,active=True).first()
+    if not gateway:return jsonify(error='unauthorized'),401
+    data=request.get_json(silent=True) or {}
+    try:connector_id=int(data.get('connector_id'))
+    except (TypeError,ValueError):return jsonify(error='connector_id_required'),400
+    connector=IntegrationConnector.query.filter_by(id=connector_id,customer_id=gateway.customer_id,connector_type='OPC_UA').first_or_404()
+    if connector.edge_gateway_id and connector.edge_gateway_id!=gateway.gateway_uid:return jsonify(error='gateway_mismatch'),403
+    if not connector.read_only or data.get('read_only') is not True:return jsonify(error='read_only_policy_required'),409
+    points=data.get('points',[]) if isinstance(data.get('points'),list) else []
+    if not points or len(points)>500:return jsonify(error='points_required_or_batch_too_large',max_points=500),422
+    accepted=[];duplicates=[];rejected=[];now=utcnow();allowed_quality={'GOOD','UNCERTAIN','BAD','STALE','UNKNOWN'}
+    mappings={m.source_path:m for m in UniversalSourceMapping.query.filter_by(customer_id=gateway.customer_id,connector_id=connector.id,enabled=True).all()}
+    for point in points:
+        if not isinstance(point,dict):rejected.append({'reason':'invalid_point'});continue
+        source=str(point.get('source_path',''))[:300];mapping=mappings.get(source);sequence=str(point.get('sequence',''))[:80];quality=str(point.get('quality','UNKNOWN')).upper()
+        if not mapping:rejected.append({'source_path':source,'reason':'mapping_not_found'});continue
+        if not sequence:rejected.append({'source_path':source,'reason':'sequence_required'});continue
+        if quality not in allowed_quality:rejected.append({'source_path':source,'reason':'invalid_quality'});continue
+        try:raw=float(point.get('value'));sampled=parse_time(point.get('source_timestamp'));mapped=raw*float(mapping.scale or 1)+float(mapping.offset or 0)
+        except (TypeError,ValueError,OverflowError):rejected.append({'source_path':source,'reason':'numeric_value_required'});continue
+        existing=Reading.query.filter_by(signal_id=mapping.signal_id,sequence=sequence).first()
+        if existing:duplicates.append(sequence);continue
+        if (now-aware(sampled)).total_seconds()>max(30,(connector.config_json or {}).get('opcua',{}).get('stale_seconds',120)) and quality=='GOOD':quality='STALE'
+        reading=Reading(customer_id=gateway.customer_id,asset_id=mapping.asset_id,signal_id=mapping.signal_id,sampled_at=sampled,value=mapped,raw_value=raw,unit=mapping.signal.unit,quality=quality,sequence=sequence)
+        db.session.add(reading);mapping.last_value=mapped;mapping.last_quality=quality;mapping.last_success_at=now;mapping.last_error=None;accepted.append(sequence)
+        asset=Asset.query.filter_by(id=mapping.asset_id,customer_id=gateway.customer_id).first()
+        if asset:asset.last_seen=now
+    connector.last_tested_at=now;gateway.last_heartbeat_at=now
+    if accepted:connector.last_success_at=now;connector.status='CONNECTED';connector.last_error=None
+    elif rejected:connector.status='DEGRADED';connector.last_error=f'{len(rejected)} OPC point(s) rejected'
+    db.session.add(IntegrationJobEvent(customer_id=gateway.customer_id,connector_id=connector.id,worker_type='OPC_UA_LIVE',status='SUCCESS' if accepted else 'DEGRADED',mapped_points=len(accepted),detail=f'accepted={len(accepted)} duplicate={len(duplicates)} rejected={len(rejected)} queue={data.get("queue_depth",0)}'))
+    try:db.session.commit()
+    except Exception:
+        db.session.rollback();current_app.logger.exception('OPC UA live batch failed connector=%s',connector.id);return jsonify(error='batch_failed_safely'),500
+    return jsonify(ok=True,status='accepted',accepted=accepted,duplicates=duplicates,rejected=rejected,accepted_count=len(accepted),duplicate_count=len(duplicates),rejected_count=len(rejected),read_only=True),207 if rejected else 202
+
+@bp.get('/integrations/<int:connector_id>/opc-ua/runtime')
+@login_required
+def opc_ua_runtime_dashboard(connector_id):
+    connector=connector_for_tenant(connector_id)
+    if connector.connector_type!='OPC_UA':abort(404)
+    mappings=UniversalSourceMapping.query.filter_by(customer_id=tenant_id(),connector_id=connector.id).order_by(UniversalSourceMapping.id).all()
+    gateway=EdgeGateway.query.filter_by(customer_id=tenant_id(),gateway_uid=connector.edge_gateway_id).first() if connector.edge_gateway_id else None
+    events=IntegrationJobEvent.query.filter_by(customer_id=tenant_id(),connector_id=connector.id,worker_type='OPC_UA_LIVE').order_by(desc(IntegrationJobEvent.created_at)).limit(30).all()
+    now=utcnow();gateway_online=bool(gateway and gateway.last_heartbeat_at and (now-aware(gateway.last_heartbeat_at)).total_seconds()<=180)
+    return render_template('opc_ua_runtime_dashboard.html',connector=connector,mappings=mappings,gateway=gateway,gateway_online=gateway_online,events=events)
