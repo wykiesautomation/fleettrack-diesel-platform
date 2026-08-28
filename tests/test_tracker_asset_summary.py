@@ -10,7 +10,7 @@ def test_tracker_dashboard_is_summary_not_duplicate_cockpit():
     assert "LAST REPORTED BATTERY" in block
     assert "LAST VALIDATED SPEED" in block
     assert "LAST GPS ACCURACY" in block
-    assert "Open Safety Twin" in block
+    assert "Open Safety Twin" in A
     assert "Last Known Location & Route" not in block
     assert "Raw GPS" not in block
 
