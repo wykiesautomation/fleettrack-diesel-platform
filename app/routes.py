@@ -891,43 +891,37 @@ def _distance_km(a,b):
     return 2*6371.0088*math.asin(min(1,math.sqrt(value)))
 
 def analyse_tracking_points(rows):
-    accepted=[];rejected=[];segments=[];current=[];previous=None;stops=[];stop_start=None;stop_point=None;maximum=0.0;moving_seconds=0.0;stopped_seconds=0.0;rejection_counts={}
-    for point in rows:
-        sampled=aware(point.sampled_at);accuracy=max(0.0,float(point.accuracy_m or 0));reported=max(0.0,float(point.speed_kmh or 0));latitude=float(point.latitude);longitude=float(point.longitude);reason=None;break_before=False;calculated=0.0;segment_km=0.0;elapsed=0.0
-        if not (-90<=latitude<=90 and -180<=longitude<=180) or (abs(latitude)<.000001 and abs(longitude)<.000001):reason='INVALID_COORDINATES'
-        elif accuracy>100:reason='POOR_ACCURACY'
-        if previous and not reason:
-            elapsed=(sampled-aware(previous.sampled_at)).total_seconds();segment_km=_distance_km(previous,point);calculated=segment_km/(elapsed/3600) if elapsed>0 else 99999
-            if elapsed<=0:reason='OUT_OF_ORDER'
-            elif calculated>220:reason='IMPOSSIBLE_JUMP'
-            elif reported<3 and float(previous.speed_kmh or 0)<3 and segment_km>max(.20,(accuracy+float(previous.accuracy_m or 0))/1000*2) and elapsed<600:reason='STATIONARY_JUMP'
-            elif elapsed>1200:break_before=True
-        item={'latitude':latitude,'longitude':longitude,'accuracy':accuracy,'speed':reported,'calculated_speed':round(calculated,1),'timestamp':sampled.strftime('%Y-%m-%d %H:%M:%S UTC'),'sequence':str(point.sequence or '')}
-        if reason:
-            item['reason']=reason;rejected.append(item);rejection_counts[reason]=rejection_counts.get(reason,0)+1
-            # A rejected observation breaks continuity. Never draw or count across it.
-            if current:segments.append(current);current=[]
-            previous=None
-            continue
-        if break_before and current:segments.append(current);current=[]
-        if previous and not break_before:
-            if reported>=3 or calculated>=3:moving_seconds+=elapsed
-            else:stopped_seconds+=elapsed
-        accepted.append(item);current.append(item);maximum=max(maximum,reported,calculated if calculated<=220 else 0)
-        if reported<3:
-            if stop_start is None:stop_start=sampled;stop_point=point
-        elif stop_start is not None:
-            duration=(sampled-stop_start).total_seconds()
-            if duration>=300:stops.append({'started':stop_start.strftime('%Y-%m-%d %H:%M UTC'),'duration_minutes':round(duration/60),'latitude':stop_point.latitude,'longitude':stop_point.longitude})
-            stop_start=None;stop_point=None
-        previous=point
-    if current:segments.append(current)
-    route_segments=[];journeys=[];distance=0.0
-    for index,group in enumerate(segments,1):
-        total=sum(_distance_dict(group[i-1],group[i]) for i in range(1,len(group)))
-        distance+=total;route_segments.append(group)
-        journeys.append({'number':index,'distance_km':round(total,2),'started':group[0]['timestamp'],'ended':group[-1]['timestamp'],'points':len(group)})
-    return {'points':accepted,'segments':route_segments,'rejected':rejected,'rejection_counts':rejection_counts,'journeys':journeys,'stops':stops,'distance_km':round(distance,2),'max_speed':round(maximum),'moving_minutes':round(moving_seconds/60),'stopped_minutes':round(stopped_seconds/60),'last':accepted[-1] if accepted else None}
+    """Historical adapter using the same strict evidence engine as Safety Twin."""
+    strict = analyse_safety_twin_points(rows)
+    rejected = list(strict['rejected']) + [dict(item, reason='STATIONARY_DRIFT') for item in strict['drift']]
+    rejection_counts = {}
+    for item in rejected:
+        reason = item.get('reason', 'REJECTED')
+        rejection_counts[reason] = rejection_counts.get(reason, 0) + 1
+    accepted = list(strict['movement'])
+    segments = [accepted] if len(accepted) > 1 else []
+    return {
+        'accepted': accepted,
+        'rejected': rejected,
+        'segments': segments,
+        'journeys': [],
+        'stops': [],
+        'total_km': strict['distance_km'],
+        'distance_km': strict['distance_km'],
+        'max_speed': strict['maximum_speed'],
+        'maximum_speed': strict['maximum_speed'],
+        'moving_minutes': strict['movement_minutes'],
+        'movement_minutes': strict['movement_minutes'],
+        'stopped_minutes': strict['stationary_minutes'],
+        'stationary_minutes': strict['stationary_minutes'],
+        'rejection_counts': rejection_counts,
+        'confidence': strict['confidence'],
+        'state': strict['state'],
+        'raw_count': strict['raw_count'],
+        'movement_count': strict['movement_count'],
+        'drift_count': strict['drift_count'],
+        'rejected_count': strict['rejected_count'],
+    }
 
 def _distance_dict(a,b):
     import math

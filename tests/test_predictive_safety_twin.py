@@ -1,5 +1,5 @@
 from pathlib import Path
-R=Path('app/routes.py').read_text();T=Path('app/templates/safety_twin.html').read_text()
+R=Path('app/routes.py').read_text(encoding="utf-8");T=Path('app/templates/safety_twin.html').read_text(encoding="utf-8")
 def test_twin_route_and_tenant_scope():
  assert "@bp.get('/asset/<int:asset_id>/safety-twin')" in R
  assert "customer_id=tenant_id()" in R[R.index('def safety_twin'):]
