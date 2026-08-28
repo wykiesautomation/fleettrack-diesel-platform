@@ -901,6 +901,7 @@ def analyse_tracking_points(rows):
     accepted = list(strict['movement'])
     segments = [accepted] if len(accepted) > 1 else []
     return {
+        'points': accepted,
         'accepted': accepted,
         'rejected': rejected,
         'segments': segments,
