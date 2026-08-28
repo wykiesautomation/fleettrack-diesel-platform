@@ -2860,3 +2860,210 @@ def evidence_pack(asset_id):
     if not _evidence_role_allowed():abort(403)
     from .evidence_reports import build_pack
     asset=Asset.query.filter_by(id=asset_id,customer_id=tenant_id()).first_or_404();rows=Location.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).order_by(desc(Location.sampled_at)).limit(250).all();rows=list(reversed(rows));twin=analyse_safety_twin_points(rows);device=Device.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,active=True).order_by(desc(Device.last_seen)).first();safety=(asset.metadata_json or {}).get('tracking_safety',{}) or {};zones=safety.get('zones',[]) if isinstance(safety.get('zones',[]),list) else [];evidence=[{'label':'GPS observations','detail':f"{twin['raw_count']} raw points received",'state':'MEASURED'},{'label':'Quality gate','detail':f"{twin['rejected_count']} point(s) rejected",'state':'VALIDATED'},{'label':'Stationary envelope','detail':f"{twin['drift_count']} point(s) excluded as drift",'state':'PROVED'},{'label':'Movement confirmation','detail':f"{twin['movement_count']} movement point(s) confirmed",'state':'PROVED'}];payload=_evidence_payload(asset,twin,rows,device,zones,evidence);data=build_pack(payload);audit(tenant_id(),'EVIDENCE_PACK_EXPORTED',asset.id,device.id if device else None,'USER',current_user.id,f"Evidence ZIP pack exported: {payload['report_id']}");db.session.commit();return send_file(io.BytesIO(data),mimetype='application/zip',as_attachment=True,download_name=f"{payload['report_id']}.zip")
+
+# OPC UA Connection Studio - Part 1 (read-only configuration and edge test contract)
+@bp.route('/integrations/<int:connector_id>/opc-ua',methods=['GET','POST'])
+@login_required
+def opc_ua_connection_studio(connector_id):
+    connector=connector_for_tenant(connector_id)
+    if connector.connector_type!='OPC_UA':abort(404)
+    cfg=ConnectorEndpointConfig.query.filter_by(connector_id=connector.id,customer_id=tenant_id()).first()
+    if not cfg:
+        cfg=ConnectorEndpointConfig(customer_id=tenant_id(),connector_id=connector.id)
+        db.session.add(cfg);db.session.flush()
+    current=dict(connector.config_json or {})
+    if request.method=='POST':
+        endpoint=request.form.get('endpoint','').strip()
+        security_policy=request.form.get('security_policy','Basic256Sha256').strip()
+        security_mode=request.form.get('security_mode','SignAndEncrypt').strip()
+        auth_mode=request.form.get('auth_mode','ANONYMOUS').strip().upper()
+        vendor_profile=request.form.get('vendor_profile','GENERIC').strip().upper()
+        credential_ref=request.form.get('credential_ref','').strip()
+        certificate_ref=request.form.get('certificate_ref','').strip()
+        edge_gateway_id=request.form.get('edge_gateway_id','').strip()
+        poll=max(5,min(3600,request.form.get('poll_interval_seconds',type=int) or 30))
+        timeout=max(3,min(120,request.form.get('timeout_seconds',type=int) or 10))
+        errors=[]
+        if not endpoint.startswith('opc.tcp://'):errors.append('Endpoint must start with opc.tcp://')
+        if security_policy not in ('None','Basic256Sha256','Aes128_Sha256_RsaOaep','Aes256_Sha256_RsaPss'):errors.append('Unsupported security policy')
+        if security_mode not in ('None','Sign','SignAndEncrypt'):errors.append('Unsupported security mode')
+        if security_policy=='None' and security_mode!='None':errors.append('Security mode must be None when policy is None')
+        if security_policy!='None' and security_mode=='None':errors.append('Secure policy requires Sign or SignAndEncrypt')
+        if auth_mode not in ('ANONYMOUS','USERNAME','CERTIFICATE'):errors.append('Unsupported authentication mode')
+        if auth_mode=='USERNAME' and not credential_ref:errors.append('Username authentication requires a local secret reference')
+        if auth_mode=='CERTIFICATE' and not certificate_ref:errors.append('Certificate authentication requires a local certificate reference')
+        if errors:
+            for message in errors:flash(message,'error')
+        else:
+            connector.endpoint=endpoint;connector.poll_interval_seconds=poll;connector.read_only=True
+            connector.edge_gateway_id=edge_gateway_id or None;connector.credential_ref=credential_ref or None
+            connector.status='CONFIGURED' if edge_gateway_id else 'WAITING_FOR_EDGE_GATEWAY'
+            connector.enabled=False
+            connector.config_json={**current,'opcua':{'vendor_profile':vendor_profile,'security_policy':security_policy,'security_mode':security_mode,'auth_mode':auth_mode,'certificate_ref':certificate_ref,'timeout_seconds':timeout,'read_only':True,'allow_write':False,'allow_methods':False,'allow_alarm_ack':False,'configuration_version':'opc-part1-v1'}}
+            cfg.endpoint_url=endpoint;cfg.poll_interval_seconds=poll;cfg.timeout_seconds=timeout;cfg.auth_mode=auth_mode
+            db.session.add(IntegrationEvent(customer_id=tenant_id(),connector_id=connector.id,event_type='OPC_UA_CONFIGURATION_SAVED',status='OK',detail=f'{endpoint} · {security_policy}/{security_mode} · read-only'))
+            audit(tenant_id(),'OPC_UA_CONFIGURATION_SAVED',None,None,'USER',current_user.id,f'OPC UA connector {connector.id} configured read-only')
+            db.session.commit();flash('OPC UA read-only configuration saved. The Edge Gateway must run Test Connection.','ok')
+            return redirect(url_for('main.opc_ua_connection_studio',connector_id=connector.id))
+    op=current.get('opcua',{}) if isinstance(current,dict) else {}
+    gateway=None
+    if connector.edge_gateway_id:
+        gateway=EdgeGateway.query.filter_by(customer_id=tenant_id(),gateway_uid=connector.edge_gateway_id,active=True).first()
+    return render_template('opc_ua_connection_studio.html',connector=connector,cfg=cfg,opc=op,gateway=gateway,vendor_profiles=['GENERIC','ABB_800XA','ABB_FREELANCE','SIEMENS','ROCKWELL','HONEYWELL'])
+
+@bp.post('/api/v1/edge/opc-ua/<int:connector_id>/test-result')
+def opc_ua_edge_test_result(connector_id):
+    gateway=_edge_auth()
+    if not gateway:return jsonify(error='unauthorized'),401
+    connector=IntegrationConnector.query.filter_by(id=connector_id,customer_id=gateway.customer_id,connector_type='OPC_UA').first_or_404()
+    if connector.edge_gateway_id and connector.edge_gateway_id!=gateway.gateway_uid:return jsonify(error='gateway_mismatch'),403
+    data=request.get_json(silent=True) or {};ok=bool(data.get('ok'))
+    safe_server=str(data.get('server_name',''))[:120];safe_detail=str(data.get('detail',''))[:350]
+    connector.last_tested_at=utcnow();connector.last_error=None if ok else (safe_detail or 'OPC UA connection test failed')
+    if ok:
+        connector.status='CONNECTED';connector.last_success_at=utcnow();connector.edge_gateway_id=gateway.gateway_uid
+    else:connector.status='ERROR'
+    db.session.add(IntegrationJobEvent(customer_id=gateway.customer_id,connector_id=connector.id,worker_type='OPC_UA_TEST',status='SUCCESS' if ok else 'FAILED',detail=(safe_server+' · '+safe_detail).strip(' · ')))
+    db.session.commit();return jsonify(ok=ok,status=connector.status,read_only=True)
+
+# OPC UA Node Browser - Part 2. Browse/read occurs only on the assigned local Edge Gateway.
+@bp.get('/integrations/<int:connector_id>/opc-ua/nodes')
+@login_required
+def opc_ua_node_browser(connector_id):
+    connector=connector_for_tenant(connector_id)
+    if connector.connector_type!='OPC_UA':abort(404)
+    config=dict(connector.config_json or {});browser=config.get('opcua_browser',{}) if isinstance(config,dict) else {}
+    nodes=browser.get('nodes',[]) if isinstance(browser,dict) else []
+    selected=browser.get('selected') if isinstance(browser,dict) else None
+    query=request.args.get('q','').strip().lower();datatype=request.args.get('datatype','').strip().upper()
+    filtered=[]
+    for node in nodes:
+        hay=' '.join(str(node.get(k,'')) for k in ('node_id','display_name','browse_name')).lower()
+        if query and query not in hay:continue
+        if datatype and str(node.get('data_type','')).upper()!=datatype:continue
+        filtered.append(node)
+    return render_template('opc_ua_node_browser.html',connector=connector,nodes=filtered,selected=selected,query=request.args.get('q',''),datatype=datatype,browser=browser)
+
+@bp.post('/integrations/<int:connector_id>/opc-ua/nodes/request')
+@login_required
+def opc_ua_node_browser_request(connector_id):
+    connector=connector_for_tenant(connector_id)
+    if connector.connector_type!='OPC_UA':abort(404)
+    if not connector.edge_gateway_id:
+        flash('Assign an Edge Gateway in Part 1 before browsing OPC nodes.','error');return redirect(url_for('main.opc_ua_node_browser',connector_id=connector.id))
+    config=dict(connector.config_json or {});request_id=secrets.token_hex(12)
+    config['opcua_browser_request']={'request_id':request_id,'action':'BROWSE','root_node':request.form.get('root_node','i=85').strip() or 'i=85','max_depth':max(1,min(5,request.form.get('max_depth',type=int) or 2)),'max_nodes':max(25,min(1000,request.form.get('max_nodes',type=int) or 250)),'created_at':utcnow().isoformat(),'status':'PENDING','read_only':True}
+    connector.config_json=config;db.session.add(IntegrationEvent(customer_id=tenant_id(),connector_id=connector.id,event_type='OPC_UA_BROWSE_REQUESTED',status='PENDING',detail=f'Read-only browse request {request_id}'))
+    db.session.commit();flash('Browse request queued for the local Edge Gateway.','ok');return redirect(url_for('main.opc_ua_node_browser',connector_id=connector.id))
+
+@bp.post('/integrations/<int:connector_id>/opc-ua/nodes/read-request')
+@login_required
+def opc_ua_node_read_request(connector_id):
+    connector=connector_for_tenant(connector_id)
+    if connector.connector_type!='OPC_UA':abort(404)
+    node_id=request.form.get('node_id','').strip()
+    if not node_id or len(node_id)>300:
+        flash('A valid OPC UA Node ID is required.','error');return redirect(url_for('main.opc_ua_node_browser',connector_id=connector.id))
+    config=dict(connector.config_json or {});request_id=secrets.token_hex(12)
+    config['opcua_read_request']={'request_id':request_id,'action':'READ','node_id':node_id,'created_at':utcnow().isoformat(),'status':'PENDING','read_only':True}
+    connector.config_json=config;db.session.add(IntegrationEvent(customer_id=tenant_id(),connector_id=connector.id,event_type='OPC_UA_READ_REQUESTED',status='PENDING',detail=f'Read-only node test {node_id}'))
+    db.session.commit();flash('Read Test queued for the local Edge Gateway.','ok');return redirect(url_for('main.opc_ua_node_browser',connector_id=connector.id))
+
+@bp.get('/api/v1/edge/opc-ua/<int:connector_id>/browser-request')
+def opc_ua_edge_browser_request(connector_id):
+    token=request.headers.get('Authorization','').removeprefix('Bearer ').strip();gateway=EdgeGateway.query.filter_by(api_token=token,active=True).first()
+    if not gateway:return jsonify(error='unauthorized'),401
+    connector=IntegrationConnector.query.filter_by(id=connector_id,customer_id=gateway.customer_id,connector_type='OPC_UA').first_or_404()
+    if connector.edge_gateway_id and connector.edge_gateway_id!=gateway.gateway_uid:return jsonify(error='gateway_mismatch'),403
+    config=dict(connector.config_json or {});request_payload=config.get('opcua_read_request') or config.get('opcua_browser_request')
+    if not request_payload or request_payload.get('status')!='PENDING':return jsonify(ok=True,request=None,read_only=True)
+    return jsonify(ok=True,request=request_payload,endpoint=connector.endpoint,opcua=config.get('opcua',{}),read_only=True)
+
+@bp.post('/api/v1/edge/opc-ua/<int:connector_id>/browser-result')
+def opc_ua_edge_browser_result(connector_id):
+    token=request.headers.get('Authorization','').removeprefix('Bearer ').strip();gateway=EdgeGateway.query.filter_by(api_token=token,active=True).first()
+    if not gateway:return jsonify(error='unauthorized'),401
+    connector=IntegrationConnector.query.filter_by(id=connector_id,customer_id=gateway.customer_id,connector_type='OPC_UA').first_or_404()
+    if connector.edge_gateway_id and connector.edge_gateway_id!=gateway.gateway_uid:return jsonify(error='gateway_mismatch'),403
+    data=request.get_json(silent=True) or {};action=str(data.get('action','')).upper();request_id=str(data.get('request_id',''))
+    config=dict(connector.config_json or {});key='opcua_read_request' if action=='READ' else 'opcua_browser_request';pending=config.get(key,{})
+    if not request_id or pending.get('request_id')!=request_id:return jsonify(error='request_id_mismatch'),409
+    if action=='BROWSE':
+        raw_nodes=data.get('nodes',[]) if isinstance(data.get('nodes'),list) else [];nodes=[]
+        for raw in raw_nodes[:1000]:
+            if not isinstance(raw,dict):continue
+            node_id=str(raw.get('node_id',''))[:300];display=str(raw.get('display_name',''))[:160]
+            if not node_id:continue
+            nodes.append({'node_id':node_id,'display_name':display,'browse_name':str(raw.get('browse_name',''))[:160],'node_class':str(raw.get('node_class',''))[:40],'data_type':str(raw.get('data_type',''))[:80],'access_level':'READ_ONLY','has_children':bool(raw.get('has_children'))})
+        config['opcua_browser']={'nodes':nodes,'count':len(nodes),'root_node':pending.get('root_node'),'completed_at':utcnow().isoformat(),'gateway_uid':gateway.gateway_uid,'truncated':len(raw_nodes)>1000}
+    elif action=='READ':
+        result=data.get('result',{}) if isinstance(data.get('result'),dict) else {}
+        config['opcua_browser']={**config.get('opcua_browser',{}),'selected':{'node_id':pending.get('node_id'),'display_name':str(result.get('display_name',''))[:160],'data_type':str(result.get('data_type',''))[:80],'value':result.get('value'),'quality':str(result.get('quality','UNKNOWN'))[:40],'source_timestamp':str(result.get('source_timestamp',''))[:60],'server_timestamp':str(result.get('server_timestamp',''))[:60],'status_code':str(result.get('status_code',''))[:80],'read_at':utcnow().isoformat(),'read_only':True}}
+    else:return jsonify(error='unsupported_action'),422
+    pending['status']='COMPLETED';pending['completed_at']=utcnow().isoformat();config[key]=pending;connector.config_json=config;connector.last_success_at=utcnow();connector.status='CONNECTED'
+    db.session.add(IntegrationJobEvent(customer_id=gateway.customer_id,connector_id=connector.id,worker_type='OPC_UA_'+action,status='SUCCESS',detail=f'{action} request {request_id} completed read-only'))
+    db.session.commit();return jsonify(ok=True,action=action,read_only=True)
+
+# OPC UA Mapping Studio - Part 3. Maps read-only OPC nodes to existing tenant signals.
+@bp.get('/integrations/<int:connector_id>/opc-ua/mappings')
+@login_required
+def opc_ua_mapping_studio(connector_id):
+    connector=connector_for_tenant(connector_id)
+    if connector.connector_type!='OPC_UA':abort(404)
+    config=dict(connector.config_json or {});browser=config.get('opcua_browser',{}) if isinstance(config,dict) else {}
+    selected=browser.get('selected') if isinstance(browser,dict) else None
+    mappings=UniversalSourceMapping.query.filter_by(customer_id=tenant_id(),connector_id=connector.id).order_by(UniversalSourceMapping.id).all()
+    assets=Asset.query.filter_by(customer_id=tenant_id(),archived=False).order_by(Asset.name).all()
+    signals=SignalDefinition.query.filter_by(customer_id=tenant_id(),enabled=True).order_by(SignalDefinition.asset_id,SignalDefinition.label).all()
+    return render_template('opc_ua_mapping_studio.html',connector=connector,selected=selected,mappings=mappings,assets=assets,signals=signals)
+
+@bp.post('/integrations/<int:connector_id>/opc-ua/mappings')
+@login_required
+def opc_ua_mapping_create(connector_id):
+    connector=connector_for_tenant(connector_id)
+    if connector.connector_type!='OPC_UA':abort(404)
+    asset=Asset.query.filter_by(id=request.form.get('asset_id',type=int),customer_id=tenant_id()).first_or_404()
+    signal=SignalDefinition.query.filter_by(id=request.form.get('signal_id',type=int),asset_id=asset.id,customer_id=tenant_id(),enabled=True).first_or_404()
+    node_id=request.form.get('node_id','').strip();data_type=request.form.get('data_type','FLOAT').strip().upper()
+    if not node_id or len(node_id)>300:
+        flash('A valid OPC UA Node ID is required.','error');return redirect(url_for('main.opc_ua_mapping_studio',connector_id=connector.id))
+    if data_type not in ('BOOLEAN','INT16','UINT16','INT32','UINT32','INT64','UINT64','FLOAT','DOUBLE','STRING','DATETIME'):
+        flash('Unsupported OPC UA datatype.','error');return redirect(url_for('main.opc_ua_mapping_studio',connector_id=connector.id))
+    try:scale=float(request.form.get('scale') or 1);offset=float(request.form.get('offset') or 0)
+    except ValueError:
+        flash('Scale and offset must be numeric.','error');return redirect(url_for('main.opc_ua_mapping_studio',connector_id=connector.id))
+    if not (-1000000<=scale<=1000000 and -1000000000<=offset<=1000000000):
+        flash('Scale or offset is outside the safe range.','error');return redirect(url_for('main.opc_ua_mapping_studio',connector_id=connector.id))
+    mapping=UniversalSourceMapping(customer_id=tenant_id(),connector_id=connector.id,asset_id=asset.id,signal_id=signal.id,source_path=node_id,timestamp_path='source_timestamp',quality_path='quality',data_type=data_type,scale=scale,offset=offset,byte_order='BIG',word_order='BIG',enabled=True)
+    db.session.add(mapping);db.session.add(IntegrationEvent(customer_id=tenant_id(),connector_id=connector.id,event_type='OPC_UA_MAPPING_CREATED',status='OK',detail=f'{node_id} → {asset.name}.{signal.key} read-only'))
+    try:
+        db.session.commit();flash('OPC UA node mapped to the AssetTrack 360 signal.','ok')
+    except Exception:
+        db.session.rollback();flash('That OPC node is already mapped to this signal.','error')
+    return redirect(url_for('main.opc_ua_mapping_studio',connector_id=connector.id))
+
+@bp.post('/integrations/<int:connector_id>/opc-ua/mappings/<int:mapping_id>/toggle')
+@login_required
+def opc_ua_mapping_toggle(connector_id,mapping_id):
+    connector=connector_for_tenant(connector_id)
+    mapping=UniversalSourceMapping.query.filter_by(id=mapping_id,connector_id=connector.id,customer_id=tenant_id()).first_or_404()
+    mapping.enabled=not mapping.enabled;db.session.add(IntegrationEvent(customer_id=tenant_id(),connector_id=connector.id,event_type='OPC_UA_MAPPING_TOGGLED',status='OK',detail=f'{mapping.source_path} enabled={mapping.enabled}'))
+    db.session.commit();return redirect(url_for('main.opc_ua_mapping_studio',connector_id=connector.id))
+
+@bp.post('/integrations/<int:connector_id>/opc-ua/mappings/<int:mapping_id>/delete')
+@login_required
+def opc_ua_mapping_delete(connector_id,mapping_id):
+    connector=connector_for_tenant(connector_id)
+    mapping=UniversalSourceMapping.query.filter_by(id=mapping_id,connector_id=connector.id,customer_id=tenant_id()).first_or_404()
+    detail=f'{mapping.source_path} mapping removed';db.session.delete(mapping);db.session.add(IntegrationEvent(customer_id=tenant_id(),connector_id=connector.id,event_type='OPC_UA_MAPPING_DELETED',status='OK',detail=detail));db.session.commit();flash('OPC UA mapping removed.','ok')
+    return redirect(url_for('main.opc_ua_mapping_studio',connector_id=connector.id))
+
+@bp.post('/integrations/<int:connector_id>/opc-ua/mappings/preview')
+@login_required
+def opc_ua_mapping_preview(connector_id):
+    connector=connector_for_tenant(connector_id)
+    if connector.connector_type!='OPC_UA':abort(404)
+    node_id=request.form.get('node_id','').strip()
+    try:raw=float(request.form.get('raw_value'));scale=float(request.form.get('scale') or 1);offset=float(request.form.get('offset') or 0)
+    except (TypeError,ValueError):return jsonify(ok=False,error='numeric_raw_scale_offset_required'),422
+    return jsonify(ok=True,node_id=node_id,raw_value=raw,mapped_value=raw*scale+offset,read_only=True,persisted=False)
