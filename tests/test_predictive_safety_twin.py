@@ -6,7 +6,7 @@ def test_twin_route_and_tenant_scope():
 def test_stationary_evidence_gate():
  block=R[R.index('def analyse_safety_twin_points'):R.index("@bp.get('/asset/<int:asset_id>/safety-twin')")]
  assert 'len(candidate)>=3' in block and 'elapsed>=20' in block
- assert 'envelope=max(25.0' in block
+ assert 'envelope=max(12.0' in block
 def test_prediction_never_persisted():
  assert 'Predictions are never persisted as telemetry' in R
  assert 'PREDICTION IS NOT TELEMETRY' in T

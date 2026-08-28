@@ -893,7 +893,7 @@ def _distance_km(a,b):
 def analyse_tracking_points(rows):
     """Historical adapter using the same strict evidence engine as Safety Twin."""
     strict = analyse_safety_twin_points(rows)
-    rejected = list(strict['rejected']) + [dict(item, reason='STATIONARY_DRIFT') for item in strict['drift']]
+    rejected = list(strict['rejected']) + list(strict.get('low_quality', [])) + [dict(item, reason='STATIONARY_DRIFT') for item in strict['drift']]
     rejection_counts = {}
     for item in rejected:
         reason = item.get('reason', 'REJECTED')
@@ -922,7 +922,9 @@ def analyse_tracking_points(rows):
         'raw_count': strict['raw_count'],
         'movement_count': strict['movement_count'],
         'drift_count': strict['drift_count'],
-        'rejected_count': strict['rejected_count'],
+        'rejected_count': strict['rejected_count'] + strict.get('low_quality_count', 0),
+        'low_quality_count': strict.get('low_quality_count', 0),
+        'raw_speed': (strict['raw'][-1]['speed'] if strict['raw'] else None),
     }
 
 def _distance_dict(a,b):
@@ -2756,31 +2758,36 @@ def api_latest(asset_id):
 
 # Predictive Safety Twin Batch 1-2: strict evidence-aware operational view.
 def analyse_safety_twin_points(rows):
-    """Build an evidence chain without allowing GPS drift to become movement.
+    """Validate phone/vehicle movement without converting GPS uncertainty into distance.
 
-    Raw observations are retained, but movement requires three consecutive points
-    outside an accuracy-aware stationary envelope and at least 20 seconds of
-    sustained displacement. Predictions are never persisted as telemetry.
+    Mobile API accepts fixes up to 150 m so they remain available as last-known
+    evidence. Route movement requires route-grade accuracy (<=50 m), at least
+    three progressive fixes, 20 seconds, and displacement outside an
+    accuracy-aware envelope. Predictions are never persisted as telemetry.
     """
-    raw=[]; rejected=[]; movement=[]; drift=[]; anchor=None; candidate=[]
+    raw=[];rejected=[];movement=[];drift=[];low_quality=[];anchor=None;candidate=[]
     for row in rows:
-        acc=max(3.0,float(row.accuracy_m or 0)); item={'latitude':float(row.latitude),'longitude':float(row.longitude),'accuracy':acc,'speed':max(0.0,float(row.speed_kmh or 0)),'timestamp':aware(row.sampled_at).isoformat()}
+        acc=max(3.0,float(row.accuracy_m or 0))
+        item={'latitude':float(row.latitude),'longitude':float(row.longitude),'accuracy':acc,'speed':max(0.0,float(row.speed_kmh or 0)),'timestamp':aware(row.sampled_at).isoformat()}
         raw.append(item)
         if not (-90<=item['latitude']<=90 and -180<=item['longitude']<=180) or (abs(item['latitude'])<.000001 and abs(item['longitude'])<.000001):
             item['reason']='INVALID_COORDINATES';rejected.append(item);continue
-        if acc>100:
+        if acc>150:
             item['reason']='POOR_ACCURACY';rejected.append(item);continue
-        if anchor is None: anchor=row;drift.append(item);continue
+        if acc>50:
+            item['reason']='LOW_CONFIDENCE_GPS';low_quality.append(item);candidate=[];continue
+        if anchor is None:
+            anchor=row;drift.append(item);continue
         elapsed=max(0.0,(aware(row.sampled_at)-aware(anchor.sampled_at)).total_seconds())
         distance_m=_distance_km(anchor,row)*1000
-        envelope=max(25.0,min(100.0,float(anchor.accuracy_m or 0)+acc))
+        previous_acc=max(3.0,float(anchor.accuracy_m or 0))
+        envelope=max(12.0,min(50.0,(previous_acc+acc)*0.55))
         if distance_m<=envelope:
             candidate=[];drift.append(item);continue
         candidate.append((row,item,distance_m,elapsed))
         if len(candidate)>=3 and elapsed>=20:
             movement.extend(x[1] for x in candidate);anchor=row;candidate=[]
-    distance_km=0.0;maximum=0.0;moving_seconds=0.0
-    previous=None
+    distance_km=0.0;maximum=0.0;moving_seconds=0.0;previous=None
     for item in movement:
         if previous:
             seconds=max(0.0,(datetime.fromisoformat(item['timestamp'])-datetime.fromisoformat(previous['timestamp'])).total_seconds())
@@ -2788,8 +2795,12 @@ def analyse_safety_twin_points(rows):
             calculated=km/(seconds/3600) if seconds else 0.0
             maximum=max(maximum,min(300.0,calculated));moving_seconds+=seconds
         previous=item
-    confidence=max(0,min(100,100-len(rejected)*8-(5 if len(raw)<3 else 0)))
-    return {'raw':raw,'rejected':rejected,'movement':movement,'drift':drift,'raw_count':len(raw),'rejected_count':len(rejected),'movement_count':len(movement),'drift_count':len(drift),'distance_km':round(distance_km,2),'maximum_speed':round(maximum),'movement_minutes':round(moving_seconds/60),'stationary_minutes':round(max(0,((aware(rows[-1].sampled_at)-aware(rows[0].sampled_at)).total_seconds()-moving_seconds)/60)) if len(rows)>1 else 0,'confidence':confidence,'state':'MOVING' if movement else 'STATIONARY'}
+    confidence=max(0,min(100,100-len(rejected)*8-len(low_quality)*3-(5 if len(raw)<3 else 0)))
+    if not raw: state='WAITING_FOR_GPS'
+    elif movement: state='MOVING'
+    elif not drift and low_quality: state='GPS_QUALITY_INSUFFICIENT'
+    else: state='STATIONARY'
+    return {'raw':raw,'rejected':rejected,'movement':movement,'drift':drift,'low_quality':low_quality,'raw_count':len(raw),'rejected_count':len(rejected),'movement_count':len(movement),'drift_count':len(drift),'low_quality_count':len(low_quality),'distance_km':round(distance_km,2),'maximum_speed':round(maximum),'movement_minutes':round(moving_seconds/60),'stationary_minutes':round(max(0,((aware(rows[-1].sampled_at)-aware(rows[0].sampled_at)).total_seconds()-moving_seconds)/60)) if len(rows)>1 else 0,'confidence':confidence,'state':state}
 
 @bp.get('/asset/<int:asset_id>/safety-twin')
 @login_required
