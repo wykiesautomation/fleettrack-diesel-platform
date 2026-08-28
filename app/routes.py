@@ -954,7 +954,7 @@ def fleet_tracking():
     if not asset:
         flash('Create or assign a tracking asset before opening Fleet Tracking.','error')
         return redirect(url_for('main.onboarding'))
-    return redirect(url_for('main.tracking_history',asset_id=asset.id))
+    return redirect(url_for('main.safety_twin',asset_id=asset.id))
 
 @bp.get('/asset/<int:asset_id>/tracking')
 @login_required
