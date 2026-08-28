@@ -14,3 +14,12 @@ def test_customer_ui_and_audit_events():
  assert 'EVIDENCE_REPORT_GENERATED' in R and 'EVIDENCE_PACK_EXPORTED' in R
 def test_prediction_is_not_exported_as_telemetry():
  assert 'Predictions and counterfactual previews are not device telemetry' in E
+
+
+def test_new_pages_use_base_body_block():
+    base=Path('app/templates/base.html').read_text()
+    twin=Path('app/templates/safety_twin.html').read_text()
+    centre=Path('app/templates/evidence_centre.html').read_text()
+    assert '{% block body %}' in base
+    assert '{% block body %}' in twin and '{% block content %}' not in twin
+    assert '{% block body %}' in centre and '{% block content %}' not in centre
