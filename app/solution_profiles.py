@@ -10,7 +10,7 @@ SOLUTION_PROFILES = {
         "category": "MONITORING", "asset_type": "GENERIC", "icon": "IO",
         "description": "Build a custom project from verified analog, digital, pulse and output channels.",
         "badges": ["Flexible I/O", "Custom Tags", "Board-aware"],
-        "boards": ["AT360_ESP32D_EXPANDED", "AT360_ESP32_WROOM32", "AT360_SIM808_TRACKER_2AI_2DO"],
+        "boards": ["AT360_ESP32D_EXPANDED", "AT360_ESP32_WROOM32", "AT360_SIM808_TRACKER_2AI_2DO", "AT360_LILYGO_T_SIM7000G"],
         "default_signals": [],
     },
     "TANK_LEVEL_VOLUME": {
@@ -18,7 +18,7 @@ SOLUTION_PROFILES = {
         "category": "MONITORING", "asset_type": "TANK", "icon": "TANK",
         "description": "Tank level, calibration, strapping, volume, available space and inventory alarms.",
         "badges": ["Analog Level", "Strapping", "Tank HMI"],
-        "boards": ["AT360_ESP32D_EXPANDED", "AT360_ESP32_WROOM32", "AT360_SIM808_TRACKER_2AI_2DO"],
+        "boards": ["AT360_ESP32D_EXPANDED", "AT360_ESP32_WROOM32", "AT360_SIM808_TRACKER_2AI_2DO", "AT360_LILYGO_T_SIM7000G"],
         "default_signals": [
             ("level_percent", "Tank Level", "LEVEL", "%", "tank", 20, 10, 90, 95),
             ("volume_l", "Volume", "LEVEL", "L", "numeric", None, None, None, None),
@@ -30,7 +30,7 @@ SOLUTION_PROFILES = {
         "category": "MONITORING", "asset_type": "GENERIC", "icon": "FLOW",
         "description": "Analog or pulse flow measurement, instantaneous rate, totalizer and flow alarms.",
         "badges": ["Analog/Pulse", "Rate", "Totalizer"],
-        "boards": ["AT360_ESP32D_EXPANDED", "AT360_ESP32_WROOM32", "AT360_SIM808_TRACKER_2AI_2DO"],
+        "boards": ["AT360_ESP32D_EXPANDED", "AT360_ESP32_WROOM32", "AT360_SIM808_TRACKER_2AI_2DO", "AT360_LILYGO_T_SIM7000G"],
         "default_signals": [("flow_rate", "Flow Rate", "FLOW", "L/min", "numeric", None, None, None, None), ("flow_total", "Flow Total", "COUNT", "L", "numeric", None, None, None, None)],
     },
     "PRESSURE_MONITORING": {
@@ -38,7 +38,7 @@ SOLUTION_PROFILES = {
         "category": "MONITORING", "asset_type": "GENERIC", "icon": "PRESS",
         "description": "Conditioned pressure input with engineering scaling, trends and alarm limits.",
         "badges": ["Analog Input", "Scaling", "Alarms"],
-        "boards": ["AT360_ESP32D_EXPANDED", "AT360_ESP32_WROOM32", "AT360_SIM808_TRACKER_2AI_2DO"],
+        "boards": ["AT360_ESP32D_EXPANDED", "AT360_ESP32_WROOM32", "AT360_SIM808_TRACKER_2AI_2DO", "AT360_LILYGO_T_SIM7000G"],
         "default_signals": [("pressure", "Pressure", "PRESSURE", "bar", "numeric", None, None, None, None)],
     },
     "TEMPERATURE_MONITORING": {
@@ -62,7 +62,7 @@ SOLUTION_PROFILES = {
         "category": "CONTROL", "asset_type": "GENERIC", "icon": "PUMP",
         "description": "Safe pump start/stop, run feedback, interlocks, fault handling and runtime tracking.",
         "badges": ["Safe Output", "Run Feedback", "Interlocks"],
-        "boards": ["AT360_ESP32D_EXPANDED", "AT360_ESP32_WROOM32", "AT360_SIM808_TRACKER_2AI_2DO"],
+        "boards": ["AT360_ESP32D_EXPANDED", "AT360_ESP32_WROOM32", "AT360_SIM808_TRACKER_2AI_2DO", "AT360_LILYGO_T_SIM7000G"],
         "default_signals": [("pump_run_feedback", "Pump Run Feedback", "STATE", "", "state", None, None, None, None), ("pump_fault", "Pump Fault", "STATE", "", "state", None, None, None, None)],
     },
     "MOTOR_MONITORING": {
@@ -70,7 +70,7 @@ SOLUTION_PROFILES = {
         "category": "MONITORING", "asset_type": "GENERIC", "icon": "MOTOR",
         "description": "Run state, start count, runtime, trip feedback and equipment condition.",
         "badges": ["Digital Inputs", "Runtime", "Trips"],
-        "boards": ["AT360_ESP32D_EXPANDED", "AT360_ESP32_WROOM32", "AT360_SIM808_TRACKER_2AI_2DO"],
+        "boards": ["AT360_ESP32D_EXPANDED", "AT360_ESP32_WROOM32", "AT360_SIM808_TRACKER_2AI_2DO", "AT360_LILYGO_T_SIM7000G"],
         "default_signals": [("motor_run", "Motor Run", "STATE", "", "state", None, None, None, None), ("motor_trip", "Motor Trip", "STATE", "", "state", None, None, None, None)],
     },
     "GATE_LIMIT_MONITORING": {
@@ -86,7 +86,7 @@ SOLUTION_PROFILES = {
         "category": "CONTROL", "asset_type": "GENERIC", "icon": "ALARM",
         "description": "Digital zones, alarm state, acknowledgement, output control and event history.",
         "badges": ["Digital Zones", "Events", "Safe Output"],
-        "boards": ["AT360_ESP32D_EXPANDED", "AT360_ESP32_WROOM32", "AT360_SIM808_TRACKER_2AI_2DO"],
+        "boards": ["AT360_ESP32D_EXPANDED", "AT360_ESP32_WROOM32", "AT360_SIM808_TRACKER_2AI_2DO", "AT360_LILYGO_T_SIM7000G"],
         "default_signals": [("alarm_state", "Alarm State", "STATE", "", "state", None, None, None, None)],
     },
     "PULSE_PRODUCTION_TOTALIZER": {
@@ -102,7 +102,7 @@ SOLUTION_PROFILES = {
         "category": "MONITORING", "asset_type": "GENERIC", "icon": "POWER",
         "description": "Battery voltage, low battery status, power source and supply-fault monitoring.",
         "badges": ["Battery", "Power State", "Low Alarm"],
-        "boards": ["AT360_ESP32D_EXPANDED", "AT360_ESP32_WROOM32", "AT360_SIM808_TRACKER_2AI_2DO"],
+        "boards": ["AT360_ESP32D_EXPANDED", "AT360_ESP32_WROOM32", "AT360_SIM808_TRACKER_2AI_2DO", "AT360_LILYGO_T_SIM7000G"],
         "default_signals": [("battery_v", "Battery Voltage", "VOLTAGE", "V", "battery", 3.6, 3.4, None, None)],
     },
     "GPS_ASSET_TRACKING": {
@@ -110,7 +110,7 @@ SOLUTION_PROFILES = {
         "category": "TRACKING", "asset_type": "TRACKER", "icon": "GPS",
         "description": "Position, speed, heading, route history, stops and geofence-ready tracking.",
         "badges": ["GPS/GNSS", "Route", "Movement"],
-        "boards": ["AT360_SIM808_TRACKER_2AI_2DO"],
+        "boards": ["AT360_SIM808_TRACKER_2AI_2DO", "AT360_LILYGO_T_SIM7000G"],
         "default_signals": [("speed_kmh", "Speed", "SPEED", "km/h", "numeric", None, None, 100, 120), ("battery_v", "Battery", "VOLTAGE", "V", "battery", 3.6, 3.4, None, None)],
     },
     "GSM_GPRS_TELEMETRY": {
@@ -118,7 +118,7 @@ SOLUTION_PROFILES = {
         "category": "COMMUNICATIONS", "asset_type": "GENERIC", "icon": "GSM",
         "description": "SIM, signal quality, APN, mobile data session and remote telemetry status.",
         "badges": ["GSM", "GPRS", "Signal"],
-        "boards": ["AT360_SIM808_TRACKER_2AI_2DO"], "default_signals": [],
+        "boards": ["AT360_SIM808_TRACKER_2AI_2DO", "AT360_LILYGO_T_SIM7000G"], "default_signals": [],
     },
     "WIFI_TELEMETRY": {
         "code": "WIFI_TELEMETRY", "display_name": "Wi-Fi Telemetry Node",
@@ -153,7 +153,7 @@ SOLUTION_PROFILES = {
         "category": "CONTROL", "asset_type": "GENERIC", "icon": "CUSTOM",
         "description": "Combine verified modules, I/O assignments and visual device logic.",
         "badges": ["Modules", "Visual Logic", "Custom Build"],
-        "boards": ["AT360_ESP32D_EXPANDED", "AT360_ESP32_WROOM32", "AT360_SIM808_TRACKER_2AI_2DO"],
+        "boards": ["AT360_ESP32D_EXPANDED", "AT360_ESP32_WROOM32", "AT360_SIM808_TRACKER_2AI_2DO", "AT360_LILYGO_T_SIM7000G"],
         "default_signals": [],
     },
 }

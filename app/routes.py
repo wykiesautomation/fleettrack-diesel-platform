@@ -1777,7 +1777,7 @@ def hardware_device_claim():
     expected_profile=get_profile(reg.profile_code)
     if not expected_profile:return jsonify(error='registered_profile_not_available'),409
     if requested_profile!=expected_profile['code']:return jsonify(error='profile_mismatch',expected_profile=expected_profile['code']),409
-    final_uid=('AT360-WROOM32-' if 'WROOM' in requested_profile else 'AT360-BOARD-')+board_id
+    prefix='AT360-WROOM32-' if 'WROOM' in requested_profile else ('AT360-TSIM7000G-' if 'TSIM7000G' in requested_profile or 'T_SIM7000G' in requested_profile else 'AT360-BOARD-');final_uid=prefix+board_id
     existing=Device.query.filter_by(device_uid=final_uid).first()
     if existing and (existing.customer_id!=reg.customer_id or existing.asset_id!=reg.asset_id):return jsonify(error='board_already_claimed'),409
     token=secrets.token_urlsafe(36)
