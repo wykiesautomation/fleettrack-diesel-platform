@@ -3128,3 +3128,11 @@ def opc_ua_runtime_dashboard(connector_id):
     events=IntegrationJobEvent.query.filter_by(customer_id=tenant_id(),connector_id=connector.id,worker_type='OPC_UA_LIVE').order_by(desc(IntegrationJobEvent.created_at)).limit(30).all()
     now=utcnow();gateway_online=bool(gateway and gateway.last_heartbeat_at and (now-aware(gateway.last_heartbeat_at)).total_seconds()<=180)
     return render_template('opc_ua_runtime_dashboard.html',connector=connector,mappings=mappings,gateway=gateway,gateway_online=gateway_online,events=events)
+
+# OPC UA customer landing page. Keeps Parts 1-4 discoverable from the standard sidebar.
+@bp.get('/opc-ua-studio')
+@login_required
+def opc_ua_studio_landing():
+    connectors=IntegrationConnector.query.filter_by(customer_id=tenant_id(),connector_type='OPC_UA').order_by(IntegrationConnector.name).all()
+    gateways=EdgeGateway.query.filter_by(customer_id=tenant_id(),active=True).order_by(EdgeGateway.gateway_uid).all()
+    return render_template('opc_ua_studio_landing.html',connectors=connectors,gateways=gateways)
