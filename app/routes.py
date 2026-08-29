@@ -2859,8 +2859,22 @@ def safety_twin(asset_id):
     battery_age=int(max(0,(now-aware(battery.sampled_at)).total_seconds())//60) if battery and battery.sampled_at else None
     battery_stale=connectivity!='ONLINE' or battery_age is None or battery_age>10
     state_label='LIVE VALIDATED STATE' if connectivity=='ONLINE' else 'LAST VALIDATED STATE'
+    motion_cfg=dict((asset.metadata_json or {}).get('motion_safety') or {})
+    motion_permission=any(x in caps for x in ('MOTION_PERMISSION:GRANTED','MOTION_PERMISSION:NOT_REQUIRED'))
+    motion_sensor='MOTION_SENSORS' in caps and motion_permission
+    orientation_sensor='ORIENTATION_SENSOR' in caps and motion_permission
+    mounted=bool(motion_cfg.get('mounted'))
+    vehicle_profile=str(motion_cfg.get('profile') or '').upper()=='VEHICLE'
+    motion_enabled=bool(motion_cfg.get('enabled'))
+    safety_cards=[
+      {'title':'GPS Tracking','detail':'Validated position, speed and GPS uncertainty.','status':'ACTIVE' if latest else 'WAITING FOR GPS','ready':bool(latest),'setup_url':None},
+      {'title':'Possible Impact','detail':'Uses calibrated phone motion plus GPS evidence.','status':'AVAILABLE' if motion_enabled and motion_sensor and mounted else 'MOTION SETUP REQUIRED','ready':bool(motion_enabled and motion_sensor and mounted),'setup_url':url_for('motion_safety.setup',asset_id=asset.id)},
+      {'title':'Abnormal Tilt','detail':'Compares sustained orientation with the fixed-mount baseline.','status':'AVAILABLE' if motion_enabled and orientation_sensor and mounted else 'MOUNTING SETUP REQUIRED','ready':bool(motion_enabled and orientation_sensor and mounted),'setup_url':url_for('motion_safety.setup',asset_id=asset.id)},
+      {'title':'Harsh Driving','detail':'Cross-validates braking and acceleration against GPS speed change.','status':'AVAILABLE' if motion_enabled and motion_sensor and mounted and vehicle_profile else 'VEHICLE PROFILE REQUIRED','ready':bool(motion_enabled and motion_sensor and mounted and vehicle_profile),'setup_url':url_for('motion_safety.setup',asset_id=asset.id)},
+      {'title':'Unexpected Movement','detail':'Uses validated location and motion evidence when enabled.','status':'ENABLED' if safety.get('unexpected_movement') else 'AVAILABLE' if motion_sensor else 'MOTION SETUP REQUIRED','ready':bool(safety.get('unexpected_movement') or motion_sensor),'setup_url':url_for('motion_safety.setup',asset_id=asset.id)},
+    ]
     evidence=[{'label':'Connectivity gate','detail':('Live telemetry received within 5 minutes' if connectivity=='ONLINE' else f"No live telemetry for {last_age} minute(s)" if last_age is not None else 'Device has never reported'),'state':connectivity},{'label':'GPS observations','detail':f"{twin['raw_count']} raw points received",'state':'MEASURED'},{'label':'Quality gate','detail':f"{twin['rejected_count']} point(s) rejected",'state':'VALIDATED'},{'label':'Stationary envelope','detail':f"{twin['drift_count']} point(s) remained inside uncertainty",'state':'PROVED'},{'label':'Movement confirmation','detail':f"{twin['movement_count']} confirmed movement point(s)",'state':'PROVED'}]
-    return render_template('safety_twin.html',asset=asset,device=device,twin=twin,latest=latest,zones=zones,safety=safety,caps=caps,battery=battery,last_age=last_age,battery_age=battery_age,battery_stale=battery_stale,connectivity=connectivity,state_label=state_label,evidence=evidence,now=now)
+    return render_template('safety_twin.html',asset=asset,device=device,twin=twin,latest=latest,zones=zones,safety=safety,caps=caps,battery=battery,last_age=last_age,battery_age=battery_age,battery_stale=battery_stale,connectivity=connectivity,state_label=state_label,evidence=evidence,safety_cards=safety_cards,now=now)
 
 # Evidence Report & Client Export Centre - Batch 3
 def _evidence_role_allowed():
