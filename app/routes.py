@@ -1098,7 +1098,9 @@ def asset_view(asset_id):
     if asset.asset_type=='VIBRATION':
         value=ctx['vibration'].value if ctx['vibration'] else None;vib={'rms':value,'temperature':ctx['temperature'].value if ctx['temperature'] else None,'condition':'CRITICAL' if value is not None and value>=7.1 else 'WARNING' if value is not None and value>=4.5 else 'HEALTHY' if value is not None else 'WAITING'}
     profile_caps={str(x).upper() for x in (device.capabilities or [])} if device else set()
-    profile_channel_keys={str(x.get('key','')).lower() for x in device_profile_context(device).get('channels',[])} if device else set()
+    profile_context=device_profile_context(device) if device else {}
+    if not isinstance(profile_context,dict):profile_context={}
+    profile_channel_keys={str(x.get('key','')).lower() for x in profile_context.get('channels',[]) if isinstance(x,dict)}
     has_location_capability=bool(device and ({'GPS','GNSS'} & profile_caps or {'gps_fix','gps_location','latitude','longitude'} & profile_channel_keys))
     valid_location=bool(location and -90<=float(location.latitude)<=90 and -180<=float(location.longitude)<=180 and not (abs(float(location.latitude))<0.000001 and abs(float(location.longitude))<0.000001))
     if not valid_location:location=None;route=[];track={'latitude':None,'longitude':None,'speed':None,'accuracy':None,'heading':None,'last_fix':'Waiting for valid GNSS fix','route_count':0} if has_location_capability else track
@@ -1122,12 +1124,13 @@ def asset_view(asset_id):
             value=float(selected_reading.value);state='REPORTED';display=f'{value:.2f} {selected_battery.unit or "V"}'
         age=max(0,int((now-aware(selected_reading.sampled_at)).total_seconds()));age_label='Just now' if age<60 else f'{age//60} min ago' if age<3600 else f'{age//3600} h ago'
         operational_battery={'display':display,'state':state,'updated':age_label,'charging':('Yes' if float(charging_reading.value)>=0.5 else 'No') if charging_reading else (phone_battery.get('charging') if phone_battery else 'Not reported')}
-    device_profile=device_profile_context(device);output_command=DeviceCommand.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,device_id=device.id).order_by(desc(DeviceCommand.created_at)).first() if device and device_profile.get('output_channels') else None
+    device_profile=profile_context;output_command=DeviceCommand.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,device_id=device.id).order_by(desc(DeviceCommand.created_at)).first() if device and device_profile.get('output_channels') else None
     output_feedback_verified=False
     if device and device_profile.get('output_channels'):
         feedback_ok=[]
         for output in device_profile.get('output_channels',[]):
-            signal=SignalDefinition.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,key=output.get('feedback_key')).first()
+            feedback_key=output.get('feedback_key') if isinstance(output,dict) else None
+            signal=SignalDefinition.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,key=feedback_key).first() if feedback_key else None
             reading=latest_reading(signal.id) if signal else None
             feedback_ok.append(bool(reading and now-aware(reading.sampled_at)<=timedelta(minutes=5) and str(reading.quality or '').upper() not in ('SIMULATED','STALE','NO_FIX')))
         output_feedback_verified=bool(feedback_ok and all(feedback_ok))
@@ -1562,7 +1565,8 @@ def create_output_command(asset_id):
   flash('Device is offline. Output commands are blocked until fresh firmware telemetry is received.','error');return redirect(url_for('main.asset_view',asset_id=asset.id))
  feedback_ready=[]
  for output in profile.get('output_channels',[]):
-  signal=SignalDefinition.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,key=output.get('feedback_key')).first();reading=latest_reading(signal.id) if signal else None
+  feedback_key=output.get('feedback_key') if isinstance(output,dict) else None
+  signal=SignalDefinition.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,key=feedback_key).first() if feedback_key else None;reading=latest_reading(signal.id) if signal else None
   feedback_ready.append(bool(reading and utcnow()-aware(reading.sampled_at)<=timedelta(minutes=5) and str(reading.quality or '').upper() not in ('SIMULATED','STALE')))
  if not feedback_ready or not all(feedback_ready):
   flash('Output state is not verified. Commands are blocked until fresh firmware feedback is received.','error');return redirect(url_for('main.asset_view',asset_id=asset.id))
