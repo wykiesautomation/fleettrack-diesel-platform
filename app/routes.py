@@ -3171,3 +3171,30 @@ def opc_ua_studio_landing():
     connectors=IntegrationConnector.query.filter_by(customer_id=tenant_id(),connector_type='OPC_UA').order_by(IntegrationConnector.name).all()
     gateways=EdgeGateway.query.filter_by(customer_id=tenant_id(),active=True).order_by(EdgeGateway.gateway_uid).all()
     return render_template('opc_ua_studio_landing.html',connectors=connectors,gateways=gateways)
+
+@bp.route('/integrations/<int:connector_id>/opc-ua/commissioning',methods=['GET','POST'])
+@login_required
+def opc_ua_commissioning_centre(connector_id):
+    connector=connector_for_tenant(connector_id)
+    if connector.connector_type!='OPC_UA':abort(404)
+    config=dict(connector.config_json or {});commissioning=dict(config.get('opcua_commissioning') or {})
+    checks=('gateway_registered','gateway_heartbeat','simulator_connected','browse_passed','read_test_passed','mapping_saved','live_value_received','quality_preserved','offline_queue_tested','recovery_tested','read_only_verified')
+    if request.method=='POST':
+        results={key:request.form.get(key)=='on' for key in checks};passed=sum(results.values());status='PASS' if passed==len(checks) else 'IN_PROGRESS'
+        commissioning={'status':status,'passed':passed,'total':len(checks),'checks':results,'notes':request.form.get('notes','').strip()[:1000],'updated_at':utcnow().isoformat(),'updated_by':current_user.id,'simulator_endpoint':request.form.get('simulator_endpoint','opc.tcp://127.0.0.1:4840/assettrack360/simulator/').strip()[:500]}
+        config['opcua_commissioning']=commissioning;connector.config_json=config
+        db.session.add(IntegrationEvent(customer_id=tenant_id(),connector_id=connector.id,event_type='OPC_UA_COMMISSIONING_UPDATED',status=status,detail=f'{passed}/{len(checks)} checks passed'))
+        db.session.commit();flash(f'Commissioning saved: {passed}/{len(checks)} checks passed.','ok');return redirect(url_for('main.opc_ua_commissioning_centre',connector_id=connector.id))
+    mappings=UniversalSourceMapping.query.filter_by(customer_id=tenant_id(),connector_id=connector.id).order_by(UniversalSourceMapping.id).all()
+    gateway=EdgeGateway.query.filter_by(customer_id=tenant_id(),gateway_uid=connector.edge_gateway_id).first() if connector.edge_gateway_id else None
+    return render_template('opc_ua_commissioning_centre.html',connector=connector,commissioning=commissioning,mappings=mappings,gateway=gateway,checks=checks)
+
+@bp.get('/integrations/<int:connector_id>/opc-ua/commissioning-report.json')
+@login_required
+def opc_ua_commissioning_report(connector_id):
+    connector=connector_for_tenant(connector_id)
+    if connector.connector_type!='OPC_UA':abort(404)
+    commissioning=dict((connector.config_json or {}).get('opcua_commissioning') or {})
+    payload={'product':'AssetTrack 360','report_type':'OPC UA Commissioning','connector_id':connector.id,'connector_name':connector.name,'endpoint':connector.endpoint,'edge_gateway_id':connector.edge_gateway_id,'access':'READ-ONLY','commissioning':commissioning,'generated_at':utcnow().isoformat(),'generated_by':current_user.email}
+    data=json.dumps(payload,indent=2,sort_keys=True).encode('utf-8')
+    return send_file(io.BytesIO(data),mimetype='application/json',as_attachment=True,download_name=f'AT360_OPC_Commissioning_{connector.id}.json')
