@@ -157,6 +157,9 @@ def create_app(test_config=None):
     app.register_blueprint(edge_bp)
     from .admin import admin_bp
     app.register_blueprint(admin_bp)
+    from .mobile_safety import motion_bp, mobile_api_guard
+    app.register_blueprint(motion_bp)
+    app.before_request(mobile_api_guard)
 
     with app.app_context():
         from . import edge_models  # Registers REV20A tables before create_all.

@@ -1,3 +1,4 @@
+# Mobile API supported platforms: web, android, ios
 import os, secrets, re, hashlib, io, json, time
 from datetime import datetime, timezone, timedelta
 from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify, abort, session, current_app, send_from_directory, send_file
@@ -2067,7 +2068,7 @@ def mobile_event():
         severity='CRITICAL' if event in ('POSSIBLE_ACCIDENT','CRASH_DETECTED','ROLLOVER_DETECTED','ABNORMAL_TILT','EMERGENCY_ALERT') else 'HIGH' if event in ('HARSH_BRAKING','SEVERE_BRAKING') else 'WARNING'
         status='CANCELLED_BY_USER' if event=='POSSIBLE_ACCIDENT_CANCELLED' else 'POSSIBLE' if event in ('POSSIBLE_ACCIDENT','ABNORMAL_TILT','UNEXPECTED_MOVEMENT') else 'CONFIRMED' if event in ('CRASH_DETECTED','ROLLOVER_DETECTED','EMERGENCY_ALERT') else 'RECORDED'
         row=Live360SafetyEvent(customer_id=device.customer_id,asset_id=device.asset_id,device_id=device.id,event_type=event,severity=severity,confidence=confidence,status=status,sampled_at=sampled,latitude=lat,longitude=lon,accuracy_m=accuracy,speed_before_kmh=before,speed_after_kmh=after,peak_acceleration_ms2=peak,deceleration_ms2=decel,sequence=sequence,detail_json={'client_version':str(data.get('client_version') or '')[:40],'detection_version':'phone-motion-safety-2.0','roll_deg':bounded('roll_deg',-180,180),'pitch_deg':bounded('pitch_deg',-180,180),'motion_source':str(data.get('motion_source') or 'PHONE_WEB')[:30],'candidate_only':event in ('POSSIBLE_ACCIDENT','ABNORMAL_TILT','UNEXPECTED_MOVEMENT')})
-        db.session.add(row);audit(device.customer_id,event,device.asset_id,device.id,'DEVICE',None,f'{event.replace("_"," ").title()} advisory received')
+        db.session.add(row);db.session.flush();from .mobile_safety import confirmation;confirmation(row,data,device);audit(device.customer_id,event,device.asset_id,device.id,'DEVICE',None,f'{event.replace("_"," ").title()} advisory received')
     else:return jsonify(error='unsupported_event'),422
     db.session.commit();return jsonify(status='accepted'),202
 
