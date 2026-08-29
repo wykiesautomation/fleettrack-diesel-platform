@@ -8,7 +8,7 @@ from flask_login import current_user, login_required
 
 from . import db
 from .edge_models import EdgeGatewayAudit, EdgeGatewayReceipt, EdgeGatewayRegistration
-from .models import Asset, Reading, Site
+from .models import Asset, Reading, Site, IntegrationConnector, UniversalSourceMapping, SignalDefinition, IntegrationEvent
 
 edge_bp = Blueprint('edge', __name__)
 
@@ -278,3 +278,75 @@ def secure_ingest():
         errors=errors[:5],
         api_revision='REV20A2',
     ), 202
+
+
+# Part 5: secure local Edge Gateway Agent contract. These endpoints use the
+# one-time/rotatable gateway registry token, never customer browser sessions.
+@edge_bp.get('/api/v1/gateways/runtime-config')
+def gateway_runtime_config():
+    gateway=authenticate_gateway()
+    if not gateway:return jsonify(error='unauthorized'),401
+    connectors=IntegrationConnector.query.filter_by(customer_id=gateway.customer_id,edge_gateway_id=gateway.gateway_uid,connector_type='OPC_UA').all()
+    rows=[]
+    for connector in connectors:
+        cfg=dict(connector.config_json or {});opc=dict(cfg.get('opcua') or {})
+        mappings=UniversalSourceMapping.query.filter_by(customer_id=gateway.customer_id,connector_id=connector.id,enabled=True).order_by(UniversalSourceMapping.id).all()
+        rows.append({'connector_id':connector.id,'name':connector.name,'endpoint':connector.endpoint,'enabled':bool(connector.enabled),'poll_interval_seconds':max(1,int(connector.poll_interval_seconds or 60)),'read_only':True,'opcua':{'security_policy':opc.get('security_policy','None'),'security_mode':opc.get('security_mode','None'),'auth_mode':opc.get('auth_mode','ANONYMOUS'),'credential_ref':connector.credential_ref or '','certificate_ref':opc.get('certificate_ref',''),'timeout_seconds':max(3,int(opc.get('timeout_seconds') or 10)),'stale_seconds':max(30,int(opc.get('stale_seconds') or 120)),'allow_write':False,'allow_methods':False,'allow_alarm_ack':False},'mappings':[{'source_path':m.source_path,'data_type':m.data_type,'scale':float(m.scale or 1),'offset':float(m.offset or 0)} for m in mappings]})
+    return jsonify(gateway_uid=gateway.gateway_uid,server_time=now().isoformat(),read_only=True,connectors=rows),200
+
+@edge_bp.get('/api/v1/gateways/opc-ua/work')
+def gateway_opc_work():
+    gateway=authenticate_gateway()
+    if not gateway:return jsonify(error='unauthorized'),401
+    for connector in IntegrationConnector.query.filter_by(customer_id=gateway.customer_id,edge_gateway_id=gateway.gateway_uid,connector_type='OPC_UA').order_by(IntegrationConnector.id).all():
+        cfg=dict(connector.config_json or {})
+        job=cfg.get('opcua_read_request') or cfg.get('opcua_browser_request')
+        if isinstance(job,dict) and job.get('status')=='PENDING':
+            return jsonify(connector_id=connector.id,endpoint=connector.endpoint,opcua=cfg.get('opcua',{}),request=job,read_only=True),200
+    return jsonify(request=None,read_only=True),200
+
+@edge_bp.post('/api/v1/gateways/opc-ua/work-result')
+def gateway_opc_work_result():
+    gateway=authenticate_gateway()
+    if not gateway:return jsonify(error='unauthorized'),401
+    data=request.get_json(silent=True) or {};connector_id=int(data.get('connector_id') or 0)
+    connector=IntegrationConnector.query.filter_by(id=connector_id,customer_id=gateway.customer_id,edge_gateway_id=gateway.gateway_uid,connector_type='OPC_UA').first()
+    if not connector:return jsonify(error='connector_not_assigned'),403
+    cfg=dict(connector.config_json or {});request_id=str(data.get('request_id',''))
+    key=None
+    for candidate in ('opcua_read_request','opcua_browser_request'):
+        if isinstance(cfg.get(candidate),dict) and cfg[candidate].get('request_id')==request_id:key=candidate;break
+    if not key:return jsonify(error='request_mismatch'),409
+    success=bool(data.get('success'));result=data.get('result') if success else None
+    cfg[key]={**cfg[key],'status':'COMPLETED' if success else 'ERROR','completed_at':now().isoformat(),'result':result,'error':str(data.get('error',''))[:500] or None}
+    connector.config_json=cfg;connector.last_tested_at=now();connector.status='CONNECTED' if success else 'ERROR';connector.last_error=None if success else str(data.get('error',''))[:500]
+    db.session.add(IntegrationEvent(customer_id=gateway.customer_id,connector_id=connector.id,event_type='OPC_UA_EDGE_WORK_RESULT',status='OK' if success else 'ERROR',detail=f'{key} {request_id}'))
+    db.session.commit();return jsonify(status='accepted'),202
+
+@edge_bp.post('/api/v1/gateways/opc-ua/live-batch')
+def gateway_opc_live_batch():
+    gateway=authenticate_gateway()
+    if not gateway:return jsonify(error='unauthorized'),401
+    data=request.get_json(silent=True) or {}
+    if data.get('read_only') is not True:return jsonify(error='read_only_required'),403
+    connector=IntegrationConnector.query.filter_by(id=int(data.get('connector_id') or 0),customer_id=gateway.customer_id,edge_gateway_id=gateway.gateway_uid,connector_type='OPC_UA').first()
+    if not connector:return jsonify(error='connector_not_assigned'),403
+    points=data.get('points') or []
+    if not isinstance(points,list) or len(points)>500:return jsonify(error='invalid_batch'),400
+    mapping_by_path={m.source_path:m for m in UniversalSourceMapping.query.filter_by(customer_id=gateway.customer_id,connector_id=connector.id,enabled=True).all()}
+    accepted=[];duplicates=[];rejected=[]
+    for point in points:
+        source=str(point.get('source_path',''))[:300];mapping=mapping_by_path.get(source);seq=str(point.get('sequence',''))[:80]
+        if not mapping or not seq:rejected.append({'source_path':source,'reason':'mapping_or_sequence_missing'});continue
+        if Reading.query.filter_by(signal_id=mapping.signal_id,sequence=seq).first():duplicates.append(seq);continue
+        try:
+            raw_value=float(point.get('value'));stamp=str(point.get('source_timestamp') or now().isoformat()).replace('Z','+00:00');sampled=datetime.fromisoformat(stamp);value=raw_value*float(mapping.scale or 1)+float(mapping.offset or 0)
+        except Exception:rejected.append({'source_path':source,'reason':'invalid_value_or_timestamp'});continue
+        quality=str(point.get('quality','UNKNOWN')).upper()[:20]
+        if quality not in {'GOOD','UNCERTAIN','BAD','STALE','UNKNOWN'}:quality='UNKNOWN'
+        signal=db.session.get(SignalDefinition,mapping.signal_id)
+        db.session.add(Reading(customer_id=gateway.customer_id,asset_id=mapping.asset_id,signal_id=mapping.signal_id,sampled_at=sampled,value=value,raw_value=raw_value,unit=signal.unit if signal else '',quality=quality,sequence=seq))
+        mapping.last_value=value;mapping.last_quality=quality;mapping.last_success_at=now();mapping.last_error=None;accepted.append(seq)
+    connector.last_success_at=now();connector.status='CONNECTED';connector.last_error=None;gateway.last_upload_at=now();gateway.last_heartbeat_at=now();gateway.status='ONLINE';gateway.queue_depth=max(0,int(data.get('queue_depth') or 0))
+    audit(gateway,'OPC_UA_LIVE_BATCH','OK',f'accepted={len(accepted)} duplicate={len(duplicates)} rejected={len(rejected)}')
+    db.session.commit();return jsonify(status='accepted',accepted=accepted,duplicates=duplicates,rejected=rejected,read_only=True),207 if rejected else 202
