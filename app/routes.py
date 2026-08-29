@@ -3198,3 +3198,284 @@ def opc_ua_commissioning_report(connector_id):
     payload={'product':'AssetTrack 360','report_type':'OPC UA Commissioning','connector_id':connector.id,'connector_name':connector.name,'endpoint':connector.endpoint,'edge_gateway_id':connector.edge_gateway_id,'access':'READ-ONLY','commissioning':commissioning,'generated_at':utcnow().isoformat(),'generated_by':current_user.email}
     data=json.dumps(payload,indent=2,sort_keys=True).encode('utf-8')
     return send_file(io.BytesIO(data),mimetype='application/json',as_attachment=True,download_name=f'AT360_OPC_Commissioning_{connector.id}.json')
+
+MODBUS_TCP_TYPES=('BOOLEAN','UINT16','INT16','UINT32','INT32','FLOAT32','UINT64','INT64','FLOAT64')
+def modbus_tcp_config(connector):
+    cfg=dict((connector.config_json or {}).get('modbus_tcp') or {})
+    host=(connector.endpoint or '').replace('modbus.tcp://','').split(':')[0].strip()
+    return {'host':cfg.get('host') or host,'port':int(cfg.get('port') or 502),'unit_id':int(cfg.get('unit_id') or 1),'timeout_seconds':float(cfg.get('timeout_seconds') or 3),'retry_limit':int(cfg.get('retry_limit') or 2),'poll_interval_seconds':int(connector.poll_interval_seconds or 10),'read_only':True}
+
+@bp.route('/integrations/<int:connector_id>/modbus-tcp',methods=['GET','POST'])
+@login_required
+def modbus_tcp_studio(connector_id):
+    connector=connector_for_tenant(connector_id)
+    if connector.connector_type!='MODBUS_TCP':abort(404)
+    config=dict(connector.config_json or {});mb=dict(config.get('modbus_tcp') or {})
+    if request.method=='POST':
+        host=request.form.get('host','').strip();port=max(1,min(65535,request.form.get('port',type=int) or 502));unit=max(0,min(247,request.form.get('unit_id',type=int) or 1));timeout=max(1,min(30,float(request.form.get('timeout_seconds') or 3)));retry=max(0,min(5,request.form.get('retry_limit',type=int) or 2));poll=max(1,min(3600,request.form.get('poll_interval_seconds',type=int) or 10));gateway=request.form.get('edge_gateway_id','').strip()
+        if not host or not gateway:flash('Host and registered Edge Gateway are required.','error')
+        else:
+            mb={'host':host,'port':port,'unit_id':unit,'timeout_seconds':timeout,'retry_limit':retry,'read_only':True,'allowed_function_codes':[1,2,3,4],'write_function_codes':[]};config['modbus_tcp']=mb;connector.config_json=config;connector.endpoint=f'modbus.tcp://{host}:{port}';connector.edge_gateway_id=gateway;connector.poll_interval_seconds=poll;connector.read_only=True;connector.status='CONFIGURED';db.session.add(IntegrationEvent(customer_id=tenant_id(),connector_id=connector.id,event_type='MODBUS_TCP_CONFIGURED',status='OK',detail=f'{host}:{port} unit={unit} READ_ONLY'));db.session.commit();flash('Modbus TCP connection saved read-only.','ok');return redirect(request.url)
+    gateways=EdgeGateway.query.filter_by(customer_id=tenant_id(),active=True).order_by(EdgeGateway.gateway_uid).all();mappings=UniversalSourceMapping.query.filter_by(customer_id=tenant_id(),connector_id=connector.id).order_by(UniversalSourceMapping.id).all();events=IntegrationJobEvent.query.filter_by(customer_id=tenant_id(),connector_id=connector.id,worker_type='MODBUS_TCP').order_by(desc(IntegrationJobEvent.created_at)).limit(30).all()
+    return render_template('modbus_tcp_studio.html',connector=connector,config=mb,gateways=gateways,mappings=mappings,events=events,data_types=MODBUS_TCP_TYPES)
+
+@bp.post('/integrations/<int:connector_id>/modbus-tcp/read-test')
+@login_required
+def modbus_tcp_read_test(connector_id):
+    connector=connector_for_tenant(connector_id)
+    if connector.connector_type!='MODBUS_TCP':abort(404)
+    function=max(1,min(4,request.form.get('function_code',type=int) or 3));address=max(0,min(65535,request.form.get('address',type=int) or 0));count=max(1,min(125,request.form.get('count',type=int) or 1));dtype=request.form.get('data_type','UINT16').upper();byte=request.form.get('byte_order','BIG').upper();word=request.form.get('word_order','BIG').upper()
+    if dtype not in MODBUS_TCP_TYPES or function not in (1,2,3,4):abort(400)
+    cfg=dict(connector.config_json or {});cfg['modbus_tcp_read_request']={'request_id':secrets.token_hex(12),'action':'READ','function_code':function,'address':address,'count':count,'data_type':dtype,'byte_order':byte,'word_order':word,'status':'PENDING','created_at':utcnow().isoformat(),'read_only':True};connector.config_json=cfg;db.session.commit();flash('Read Test queued for the local Edge Gateway.','ok');return redirect(url_for('main.modbus_tcp_studio',connector_id=connector.id))
+
+@bp.post('/integrations/<int:connector_id>/modbus-tcp/mappings')
+@login_required
+def modbus_tcp_mapping_save(connector_id):
+    connector=connector_for_tenant(connector_id)
+    if connector.connector_type!='MODBUS_TCP':abort(404)
+    asset=Asset.query.filter_by(id=request.form.get('asset_id',type=int),customer_id=tenant_id()).first();signal=SignalDefinition.query.filter_by(id=request.form.get('signal_id',type=int),customer_id=tenant_id()).first();function=request.form.get('function_code',type=int) or 3;address=request.form.get('address',type=int);dtype=request.form.get('data_type','UINT16').upper()
+    if not asset or not signal or signal.asset_id!=asset.id or function not in (1,2,3,4) or address is None or dtype not in MODBUS_TCP_TYPES:abort(400)
+    source=f'fc{function}:address:{address}';existing=UniversalSourceMapping.query.filter_by(connector_id=connector.id,source_path=source,signal_id=signal.id).first()
+    row=existing or UniversalSourceMapping(customer_id=tenant_id(),connector_id=connector.id,asset_id=asset.id,signal_id=signal.id,source_path=source)
+    row.data_type=dtype;row.scale=float(request.form.get('scale') or 1);row.offset=float(request.form.get('offset') or 0);row.byte_order=request.form.get('byte_order','BIG').upper();row.word_order=request.form.get('word_order','BIG').upper();row.enabled=True;db.session.add(row);db.session.commit();flash('Modbus TCP register mapping saved.','ok');return redirect(url_for('main.modbus_tcp_studio',connector_id=connector.id))
+
+@bp.get('/api/v1/edge/modbus-tcp/<int:connector_id>/runtime-config')
+def modbus_tcp_runtime_config_api(connector_id):
+    token=request.headers.get('Authorization','').removeprefix('Bearer ').strip();gateway=EdgeGateway.query.filter_by(api_token=token,active=True).first()
+    if not gateway:return jsonify(error='unauthorized'),401
+    connector=IntegrationConnector.query.filter_by(id=connector_id,customer_id=gateway.customer_id,edge_gateway_id=gateway.gateway_uid,connector_type='MODBUS_TCP').first()
+    if not connector:return jsonify(error='connector_not_assigned'),403
+    mappings=[]
+    for m in UniversalSourceMapping.query.filter_by(customer_id=gateway.customer_id,connector_id=connector.id,enabled=True).all():
+        match=re.match(r'fc([1-4]):address:(\d+)',m.source_path or '')
+        if match:mappings.append({'mapping_id':m.id,'source_path':m.source_path,'function_code':int(match.group(1)),'address':int(match.group(2)),'register_count':1 if m.data_type in ('BOOLEAN','UINT16','INT16') else 2 if m.data_type in ('UINT32','INT32','FLOAT32') else 4,'data_type':m.data_type,'byte_order':m.byte_order,'word_order':m.word_order})
+    cfg=dict(connector.config_json or {});job=cfg.get('modbus_tcp_read_request')
+    return jsonify(connector_id=connector.id,config=modbus_tcp_config(connector),mappings=mappings,read_request=job if isinstance(job,dict) and job.get('status')=='PENDING' else None,read_only=True)
+
+@bp.post('/api/v1/edge/modbus-tcp/<int:connector_id>/result')
+def modbus_tcp_result_api(connector_id):
+    token=request.headers.get('Authorization','').removeprefix('Bearer ').strip();gateway=EdgeGateway.query.filter_by(api_token=token,active=True).first()
+    if not gateway:return jsonify(error='unauthorized'),401
+    connector=IntegrationConnector.query.filter_by(id=connector_id,customer_id=gateway.customer_id,edge_gateway_id=gateway.gateway_uid,connector_type='MODBUS_TCP').first()
+    if not connector:return jsonify(error='connector_not_assigned'),403
+    data=request.get_json(silent=True) or {};cfg=dict(connector.config_json or {});job=cfg.get('modbus_tcp_read_request')
+    if not isinstance(job,dict) or job.get('request_id')!=data.get('request_id'):return jsonify(error='request_mismatch'),409
+    cfg['modbus_tcp_read_request']={**job,'status':'COMPLETED' if data.get('success') else 'ERROR','result':data.get('result'),'error':str(data.get('error',''))[:500] or None,'completed_at':utcnow().isoformat()};connector.config_json=cfg;connector.status='CONNECTED' if data.get('success') else 'ERROR';connector.last_tested_at=utcnow();connector.last_error=None if data.get('success') else str(data.get('error',''))[:500];db.session.commit();return jsonify(status='accepted'),202
+
+# Part 8: read-only Modbus RTU Studio.
+MODBUS_RTU_BAUDRATES=(1200,2400,4800,9600,19200,38400,57600,115200)
+def modbus_rtu_config(connector):
+    cfg=dict((connector.config_json or {}).get('modbus_rtu') or {})
+    return {'port':cfg.get('port',''),'baudrate':int(cfg.get('baudrate') or 9600),'parity':cfg.get('parity','N'),'bytesize':int(cfg.get('bytesize') or 8),'stopbits':int(cfg.get('stopbits') or 1),'slave_id':int(cfg.get('slave_id') or 1),'timeout_seconds':float(cfg.get('timeout_seconds') or 2),'retry_limit':int(cfg.get('retry_limit') or 2),'inter_request_delay_ms':int(cfg.get('inter_request_delay_ms') or 50),'handle_local_echo':bool(cfg.get('handle_local_echo',False)),'read_only':True}
+
+@bp.route('/integrations/<int:connector_id>/modbus-rtu',methods=['GET','POST'])
+@login_required
+def modbus_rtu_studio(connector_id):
+    connector=connector_for_tenant(connector_id)
+    if connector.connector_type!='MODBUS_RTU':abort(404)
+    full=dict(connector.config_json or {});cfg=dict(full.get('modbus_rtu') or {})
+    if request.method=='POST':
+        port=request.form.get('port','').strip();baud=request.form.get('baudrate',type=int) or 9600;parity=request.form.get('parity','N').upper();bits=request.form.get('bytesize',type=int) or 8;stops=request.form.get('stopbits',type=int) or 1;slave=request.form.get('slave_id',type=int) or 1;timeout=max(.2,min(30,float(request.form.get('timeout_seconds') or 2)));retry=max(0,min(5,request.form.get('retry_limit',type=int) or 2));delay=max(0,min(5000,request.form.get('inter_request_delay_ms',type=int) or 50));poll=max(1,min(3600,request.form.get('poll_interval_seconds',type=int) or 10));gateway=request.form.get('edge_gateway_id','').strip();echo=request.form.get('handle_local_echo')=='on'
+        if not port or not gateway or baud not in MODBUS_RTU_BAUDRATES or parity not in ('N','E','O') or bits not in (7,8) or stops not in (1,2) or not 1<=slave<=247:flash('Enter a valid serial profile, Slave ID and registered Edge Gateway.','error')
+        else:
+            cfg={'port':port,'baudrate':baud,'parity':parity,'bytesize':bits,'stopbits':stops,'slave_id':slave,'timeout_seconds':timeout,'retry_limit':retry,'inter_request_delay_ms':delay,'handle_local_echo':echo,'read_only':True,'allowed_function_codes':[1,2,3,4],'write_function_codes':[]};full['modbus_rtu']=cfg;connector.config_json=full;connector.endpoint=f'modbus.rtu://{port}';connector.edge_gateway_id=gateway;connector.poll_interval_seconds=poll;connector.read_only=True;connector.status='CONFIGURED';db.session.add(IntegrationEvent(customer_id=tenant_id(),connector_id=connector.id,event_type='MODBUS_RTU_CONFIGURED',status='OK',detail=f'{port} {baud} {bits}{parity}{stops} slave={slave} READ_ONLY'));db.session.commit();flash('Modbus RTU connection saved read-only.','ok');return redirect(request.url)
+    gateways=EdgeGateway.query.filter_by(customer_id=tenant_id(),active=True).order_by(EdgeGateway.gateway_uid).all();mappings=UniversalSourceMapping.query.filter_by(customer_id=tenant_id(),connector_id=connector.id).order_by(UniversalSourceMapping.id).all()
+    return render_template('modbus_rtu_studio.html',connector=connector,config=cfg,gateways=gateways,mappings=mappings,data_types=MODBUS_TCP_TYPES,baudrates=MODBUS_RTU_BAUDRATES)
+
+@bp.post('/integrations/<int:connector_id>/modbus-rtu/read-test')
+@login_required
+def modbus_rtu_read_test(connector_id):
+    connector=connector_for_tenant(connector_id)
+    if connector.connector_type!='MODBUS_RTU':abort(404)
+    function=request.form.get('function_code',type=int) or 3;address=request.form.get('address',type=int) or 0;count=max(1,min(125,request.form.get('count',type=int) or 1));dtype=request.form.get('data_type','UINT16').upper();byte=request.form.get('byte_order','BIG').upper();word=request.form.get('word_order','BIG').upper()
+    if function not in (1,2,3,4) or address<0 or address>65535 or dtype not in MODBUS_TCP_TYPES or byte not in ('BIG','LITTLE') or word not in ('BIG','LITTLE'):abort(400)
+    cfg=dict(connector.config_json or {});cfg['modbus_rtu_read_request']={'request_id':secrets.token_hex(12),'action':'READ','function_code':function,'address':address,'count':count,'data_type':dtype,'byte_order':byte,'word_order':word,'status':'PENDING','created_at':utcnow().isoformat(),'read_only':True};connector.config_json=cfg;db.session.commit();flash('RTU Read Test queued for the assigned Edge Gateway.','ok');return redirect(url_for('main.modbus_rtu_studio',connector_id=connector.id))
+
+@bp.post('/integrations/<int:connector_id>/modbus-rtu/mappings')
+@login_required
+def modbus_rtu_mapping_save(connector_id):
+    connector=connector_for_tenant(connector_id)
+    if connector.connector_type!='MODBUS_RTU':abort(404)
+    asset=Asset.query.filter_by(id=request.form.get('asset_id',type=int),customer_id=tenant_id()).first();signal=SignalDefinition.query.filter_by(id=request.form.get('signal_id',type=int),customer_id=tenant_id()).first();function=request.form.get('function_code',type=int) or 3;address=request.form.get('address',type=int);dtype=request.form.get('data_type','UINT16').upper()
+    if not asset or not signal or signal.asset_id!=asset.id or function not in (1,2,3,4) or address is None or address<0 or address>65535 or dtype not in MODBUS_TCP_TYPES:abort(400)
+    source=f'rtu:fc{function}:address:{address}';row=UniversalSourceMapping.query.filter_by(connector_id=connector.id,source_path=source,signal_id=signal.id).first() or UniversalSourceMapping(customer_id=tenant_id(),connector_id=connector.id,asset_id=asset.id,signal_id=signal.id,source_path=source)
+    row.data_type=dtype;row.scale=float(request.form.get('scale') or 1);row.offset=float(request.form.get('offset') or 0);row.byte_order=request.form.get('byte_order','BIG').upper();row.word_order=request.form.get('word_order','BIG').upper();row.enabled=True;db.session.add(row);db.session.commit();flash('Modbus RTU register mapping saved.','ok');return redirect(url_for('main.modbus_rtu_studio',connector_id=connector.id))
+
+@bp.get('/api/v1/edge/modbus-rtu/<int:connector_id>/runtime-config')
+def modbus_rtu_runtime_config_api(connector_id):
+    token=request.headers.get('Authorization','').removeprefix('Bearer ').strip();gateway=EdgeGateway.query.filter_by(api_token=token,active=True).first()
+    if not gateway:return jsonify(error='unauthorized'),401
+    connector=IntegrationConnector.query.filter_by(id=connector_id,customer_id=gateway.customer_id,edge_gateway_id=gateway.gateway_uid,connector_type='MODBUS_RTU').first()
+    if not connector:return jsonify(error='connector_not_assigned'),403
+    mappings=[]
+    for m in UniversalSourceMapping.query.filter_by(customer_id=gateway.customer_id,connector_id=connector.id,enabled=True).all():
+        match=re.match(r'rtu:fc([1-4]):address:(\d+)',m.source_path or '')
+        if match:mappings.append({'mapping_id':m.id,'source_path':m.source_path,'function_code':int(match.group(1)),'address':int(match.group(2)),'register_count':1 if m.data_type in ('BOOLEAN','UINT16','INT16') else 2 if m.data_type in ('UINT32','INT32','FLOAT32') else 4,'data_type':m.data_type,'byte_order':m.byte_order,'word_order':m.word_order})
+    cfg=dict(connector.config_json or {});job=cfg.get('modbus_rtu_read_request')
+    return jsonify(connector_id=connector.id,config=modbus_rtu_config(connector),mappings=mappings,read_request=job if isinstance(job,dict) and job.get('status')=='PENDING' else None,read_only=True,allowed_function_codes=[1,2,3,4],write_function_codes=[])
+
+@bp.post('/api/v1/edge/modbus-rtu/<int:connector_id>/result')
+def modbus_rtu_result_api(connector_id):
+    token=request.headers.get('Authorization','').removeprefix('Bearer ').strip();gateway=EdgeGateway.query.filter_by(api_token=token,active=True).first()
+    if not gateway:return jsonify(error='unauthorized'),401
+    connector=IntegrationConnector.query.filter_by(id=connector_id,customer_id=gateway.customer_id,edge_gateway_id=gateway.gateway_uid,connector_type='MODBUS_RTU').first()
+    if not connector:return jsonify(error='connector_not_assigned'),403
+    data=request.get_json(silent=True) or {};cfg=dict(connector.config_json or {});job=cfg.get('modbus_rtu_read_request')
+    if not isinstance(job,dict) or job.get('request_id')!=data.get('request_id'):return jsonify(error='request_mismatch'),409
+    cfg['modbus_rtu_read_request']={**job,'status':'COMPLETED' if data.get('success') else 'ERROR','result':data.get('result'),'error':str(data.get('error',''))[:500] or None,'completed_at':utcnow().isoformat()};connector.config_json=cfg;connector.status='CONNECTED' if data.get('success') else 'ERROR';connector.last_tested_at=utcnow();connector.last_error=None if data.get('success') else str(data.get('error',''))[:500];db.session.commit();return jsonify(status='accepted'),202
+
+# Part 9 SQL / ODBC Read-Only Studio
+SQL_ODBC_TYPES=('SQL_SERVER','POSTGRESQL','MYSQL','MARIADB','ORACLE','DB2','SYBASE','ACCESS','GENERIC_ODBC')
+SQL_ODBC_DATA_TYPES=('BOOLEAN','INTEGER','BIGINT','DECIMAL','FLOAT','DOUBLE','DATE','TIMESTAMP','STRING')
+def sql_odbc_validate(value):
+ from client.sql_odbc.runtime import validate_query
+ return validate_query(value)
+def sql_odbc_config(c):
+ x=dict((c.config_json or {}).get('sql_odbc') or {});return {'database_type':x.get('database_type','SQL_SERVER'),'dsn':x.get('dsn',''),'driver':x.get('driver',''),'server':x.get('server',''),'port':x.get('port',''),'database':x.get('database',''),'credential_ref':x.get('credential_ref',c.credential_ref or ''),'connection_options':x.get('connection_options',''),'timeout_seconds':int(x.get('timeout_seconds') or 10),'max_rows':int(x.get('max_rows') or 500),'poll_interval_seconds':int(c.poll_interval_seconds or 60),'read_only':True}
+@bp.route('/integrations/<int:connector_id>/sql-odbc',methods=['GET','POST'])
+@login_required
+def sql_odbc_studio(connector_id):
+ c=connector_for_tenant(connector_id)
+ if c.connector_type!='SQL_ODBC':abort(404)
+ full=dict(c.config_json or {})
+ if request.method=='POST':
+  typ=request.form.get('database_type','GENERIC_ODBC').upper();dsn=request.form.get('dsn','').strip();driver=request.form.get('driver','').strip();gateway=request.form.get('edge_gateway_id','').strip();secret=request.form.get('credential_ref','').strip()
+  if typ not in SQL_ODBC_TYPES or not gateway or not secret or (not dsn and not driver):flash('Database type, Edge Gateway, credential reference and DSN or driver are required.','error')
+  else:
+   x={'database_type':typ,'dsn':dsn,'driver':driver,'server':request.form.get('server','').strip(),'port':request.form.get('port','').strip(),'database':request.form.get('database','').strip(),'credential_ref':secret,'connection_options':request.form.get('connection_options','').strip(),'timeout_seconds':max(2,min(120,request.form.get('timeout_seconds',type=int) or 10)),'max_rows':max(1,min(5000,request.form.get('max_rows',type=int) or 500)),'read_only':True,'autocommit':False,'allow_write':False,'allow_ddl':False,'allow_procedures':False};full['sql_odbc']=x;c.config_json=full;c.endpoint='odbc://'+(dsn or driver);c.credential_ref=secret;c.edge_gateway_id=gateway;c.poll_interval_seconds=max(5,min(86400,request.form.get('poll_interval_seconds',type=int) or 60));c.read_only=True;c.status='CONFIGURED';db.session.add(IntegrationEvent(customer_id=tenant_id(),connector_id=c.id,event_type='SQL_ODBC_CONFIGURED',status='OK',detail=f'{typ} READ_ONLY'));db.session.commit();flash('SQL / ODBC connection saved read-only.','ok');return redirect(request.url)
+ gateways=EdgeGateway.query.filter_by(customer_id=tenant_id(),active=True).order_by(EdgeGateway.gateway_uid).all();assets=Asset.query.filter_by(customer_id=tenant_id()).order_by(Asset.name).all();mappings=UniversalSourceMapping.query.filter_by(customer_id=tenant_id(),connector_id=c.id).order_by(UniversalSourceMapping.id).all();full=dict(c.config_json or {})
+ return render_template('sql_odbc_studio.html',connector=c,config=sql_odbc_config(c),gateways=gateways,assets=assets,mappings=mappings,database_types=SQL_ODBC_TYPES,data_types=SQL_ODBC_DATA_TYPES,schema=full.get('sql_odbc_schema_result') or {},preview=full.get('sql_odbc_query_result') or {})
+@bp.post('/integrations/<int:connector_id>/sql-odbc/discover')
+@login_required
+def sql_odbc_discover(connector_id):
+ c=connector_for_tenant(connector_id)
+ if c.connector_type!='SQL_ODBC':abort(404)
+ x=dict(c.config_json or {});x['sql_odbc_schema_request']={'request_id':secrets.token_hex(12),'action':'DISCOVER_SCHEMA','status':'PENDING','max_objects':250,'created_at':utcnow().isoformat(),'read_only':True};c.config_json=x;db.session.commit();flash('Schema discovery queued.','ok');return redirect(url_for('main.sql_odbc_studio',connector_id=c.id))
+@bp.post('/integrations/<int:connector_id>/sql-odbc/query-test')
+@login_required
+def sql_odbc_query_test(connector_id):
+ c=connector_for_tenant(connector_id)
+ if c.connector_type!='SQL_ODBC':abort(404)
+ try:q=sql_odbc_validate(request.form.get('query'))
+ except ValueError as e:flash(str(e),'error');return redirect(url_for('main.sql_odbc_studio',connector_id=c.id))
+ x=dict(c.config_json or {});x['sql_odbc_query_request']={'request_id':secrets.token_hex(12),'action':'QUERY_PREVIEW','query':q,'parameters':[],'max_rows':max(1,min(5000,request.form.get('max_rows',type=int) or 500)),'status':'PENDING','created_at':utcnow().isoformat(),'read_only':True};c.config_json=x;db.session.commit();flash('Read-only query preview queued.','ok');return redirect(url_for('main.sql_odbc_studio',connector_id=c.id))
+@bp.post('/integrations/<int:connector_id>/sql-odbc/mappings')
+@login_required
+def sql_odbc_mapping_save(connector_id):
+ c=connector_for_tenant(connector_id);asset=Asset.query.filter_by(id=request.form.get('asset_id',type=int),customer_id=tenant_id()).first();signal=SignalDefinition.query.filter_by(id=request.form.get('signal_id',type=int),customer_id=tenant_id()).first();column=re.sub(r'[^A-Za-z0-9_.$-]','',request.form.get('column',''))[:120];dtype=request.form.get('data_type','FLOAT').upper();mode=request.form.get('row_mode','FIRST').upper()
+ if c.connector_type!='SQL_ODBC' or not asset or not signal or signal.asset_id!=asset.id or not column or dtype not in SQL_ODBC_DATA_TYPES or mode not in ('FIRST','LAST'):abort(400)
+ source='sql:column:'+column;m=UniversalSourceMapping.query.filter_by(connector_id=c.id,source_path=source,signal_id=signal.id).first() or UniversalSourceMapping(customer_id=tenant_id(),connector_id=c.id,asset_id=asset.id,signal_id=signal.id,source_path=source);m.data_type=dtype;m.scale=float(request.form.get('scale') or 1);m.offset=float(request.form.get('offset') or 0);m.timestamp_path=request.form.get('timestamp_column','').strip()[:120] or None;m.quality_path=request.form.get('quality_column','').strip()[:120] or None;m.byte_order=mode;m.enabled=True;db.session.add(m);db.session.commit();flash('SQL column mapping saved.','ok');return redirect(url_for('main.sql_odbc_studio',connector_id=c.id))
+@bp.get('/api/v1/edge/sql-odbc/<int:connector_id>/runtime-config')
+def sql_odbc_runtime_config_api(connector_id):
+ token=request.headers.get('Authorization','').removeprefix('Bearer ').strip();g=EdgeGateway.query.filter_by(api_token=token,active=True).first()
+ if not g:return jsonify(error='unauthorized'),401
+ c=IntegrationConnector.query.filter_by(id=connector_id,customer_id=g.customer_id,edge_gateway_id=g.gateway_uid,connector_type='SQL_ODBC').first()
+ if not c:return jsonify(error='connector_not_assigned'),403
+ x=dict(c.config_json or {});job=next((x[k] for k in ('sql_odbc_query_request','sql_odbc_schema_request') if isinstance(x.get(k),dict) and x[k].get('status')=='PENDING'),None);maps=[]
+ for m in UniversalSourceMapping.query.filter_by(customer_id=g.customer_id,connector_id=c.id,enabled=True).all():
+  if m.source_path.startswith('sql:column:'):maps.append({'mapping_id':m.id,'source_path':m.source_path,'column':m.source_path.split(':',2)[2],'data_type':m.data_type,'scale':float(m.scale or 1),'offset':float(m.offset or 0),'timestamp_column':m.timestamp_path,'quality_column':m.quality_path,'row_mode':m.byte_order if m.byte_order in ('FIRST','LAST') else 'FIRST'})
+ return jsonify(connector_id=c.id,config=sql_odbc_config(c),work_request=job,mappings=maps,read_only=True,autocommit=False,allow_write=False,allow_ddl=False,allow_procedures=False)
+@bp.post('/api/v1/edge/sql-odbc/<int:connector_id>/result')
+def sql_odbc_result_api(connector_id):
+ token=request.headers.get('Authorization','').removeprefix('Bearer ').strip();g=EdgeGateway.query.filter_by(api_token=token,active=True).first()
+ if not g:return jsonify(error='unauthorized'),401
+ c=IntegrationConnector.query.filter_by(id=connector_id,customer_id=g.customer_id,edge_gateway_id=g.gateway_uid,connector_type='SQL_ODBC').first()
+ if not c:return jsonify(error='connector_not_assigned'),403
+ d=request.get_json(silent=True) or {};x=dict(c.config_json or {});rid=str(d.get('request_id',''));key=next((k for k in ('sql_odbc_query_request','sql_odbc_schema_request') if isinstance(x.get(k),dict) and x[k].get('request_id')==rid),None)
+ if not key:return jsonify(error='request_mismatch'),409
+ ok=bool(d.get('success'));x[key]={**x[key],'status':'COMPLETED' if ok else 'ERROR','completed_at':utcnow().isoformat(),'error':str(d.get('error',''))[:500] or None}
+ if ok:x['sql_odbc_query_result' if key=='sql_odbc_query_request' else 'sql_odbc_schema_result']=d.get('result')
+ c.config_json=x;c.status='CONNECTED' if ok else 'ERROR';c.last_tested_at=utcnow();c.last_error=None if ok else str(d.get('error',''))[:500];db.session.commit();return jsonify(status='accepted'),202
+
+# Part 10 OPC Classic Windows Bridge
+OPC_CLASSIC_DATA_TYPES=('BOOLEAN','INT16','UINT16','INT32','UINT32','INT64','UINT64','FLOAT32','FLOAT64','STRING','DATE','TIMESTAMP')
+def opc_classic_cfg(c):
+ x=dict((c.config_json or {}).get('opc_classic') or {});return {'host':x.get('host','localhost'),'server_progid':x.get('server_progid',''),'credential_ref':x.get('credential_ref',c.credential_ref or ''),'poll_interval_seconds':int(c.poll_interval_seconds or 10),'timeout_seconds':int(x.get('timeout_seconds') or 10),'max_items':int(x.get('max_items') or 500),'bitness':x.get('bitness','AUTO'),'read_only':True,'allow_write':False,'allow_alarm_ack':False}
+@bp.route('/integrations/<int:connector_id>/opc-classic',methods=['GET','POST'])
+@login_required
+def opc_classic_studio(connector_id):
+ c=connector_for_tenant(connector_id)
+ if c.connector_type!='OPC_CLASSIC':abort(404)
+ full=dict(c.config_json or {})
+ if request.method=='POST':
+  host=request.form.get('host','localhost').strip()[:120] or 'localhost';progid=request.form.get('server_progid','').strip()[:200];gateway=request.form.get('edge_gateway_id','').strip();bitness=request.form.get('bitness','AUTO').upper();secret=request.form.get('credential_ref','').strip()[:160]
+  if not progid or not gateway or bitness not in ('AUTO','32','64'):flash('OPC server ProgID, Windows Edge Gateway and valid bitness are required.','error')
+  else:
+   x={'host':host,'server_progid':progid,'credential_ref':secret,'timeout_seconds':max(2,min(120,request.form.get('timeout_seconds',type=int) or 10)),'max_items':max(1,min(500,request.form.get('max_items',type=int) or 500)),'bitness':bitness,'read_only':True,'allow_write':False,'allow_control':False,'allow_alarm_ack':False,'windows_only':True};full['opc_classic']=x;c.config_json=full;c.endpoint=f'opcda://{host}/{progid}';c.credential_ref=secret or None;c.edge_gateway_id=gateway;c.poll_interval_seconds=max(1,min(86400,request.form.get('poll_interval_seconds',type=int) or 10));c.read_only=True;c.status='CONFIGURED';db.session.add(IntegrationEvent(customer_id=tenant_id(),connector_id=c.id,event_type='OPC_CLASSIC_CONFIGURED',status='OK',detail=f'{progid}; Windows {bitness}-bit; READ_ONLY'));db.session.commit();flash('OPC Classic Windows Bridge saved read-only.','ok');return redirect(request.url)
+ gateways=EdgeGateway.query.filter_by(customer_id=tenant_id(),active=True).order_by(EdgeGateway.gateway_uid).all();assets=Asset.query.filter_by(customer_id=tenant_id()).order_by(Asset.name).all();mappings=UniversalSourceMapping.query.filter_by(customer_id=tenant_id(),connector_id=c.id).order_by(UniversalSourceMapping.id).all();full=dict(c.config_json or {})
+ return render_template('opc_classic_studio.html',connector=c,config=opc_classic_cfg(c),gateways=gateways,assets=assets,mappings=mappings,data_types=OPC_CLASSIC_DATA_TYPES,servers=full.get('opc_classic_servers_result') or [],browse=full.get('opc_classic_browse_result') or [],read_result=full.get('opc_classic_read_result') or [],preflight=full.get('opc_classic_preflight_result') or {})
+def queue_opc_classic(c,key,action,extra=None):
+ x=dict(c.config_json or {});x[key]={'request_id':secrets.token_hex(12),'action':action,'status':'PENDING','created_at':utcnow().isoformat(),'read_only':True,'allow_write':False,**(extra or {})};c.config_json=x;db.session.commit()
+@bp.post('/integrations/<int:connector_id>/opc-classic/preflight')
+@login_required
+def opc_classic_preflight(connector_id):
+ c=connector_for_tenant(connector_id)
+ if c.connector_type!='OPC_CLASSIC':abort(404)
+ queue_opc_classic(c,'opc_classic_preflight_request','PREFLIGHT');flash('Windows COM, bitness and OPC server preflight queued.','ok');return redirect(url_for('main.opc_classic_studio',connector_id=c.id))
+@bp.post('/integrations/<int:connector_id>/opc-classic/servers')
+@login_required
+def opc_classic_servers(connector_id):
+ c=connector_for_tenant(connector_id)
+ if c.connector_type!='OPC_CLASSIC':abort(404)
+ queue_opc_classic(c,'opc_classic_servers_request','LIST_SERVERS');flash('Local OPC DA server scan queued.','ok');return redirect(url_for('main.opc_classic_studio',connector_id=c.id))
+@bp.post('/integrations/<int:connector_id>/opc-classic/browse')
+@login_required
+def opc_classic_browse(connector_id):
+ c=connector_for_tenant(connector_id)
+ if c.connector_type!='OPC_CLASSIC':abort(404)
+ queue_opc_classic(c,'opc_classic_browse_request','BROWSE',{'branch':request.form.get('branch','*').strip()[:240] or '*','flat':True,'max_items':max(1,min(1000,request.form.get('max_items',type=int) or 500))});flash('Read-only tag browse queued.','ok');return redirect(url_for('main.opc_classic_studio',connector_id=c.id))
+@bp.post('/integrations/<int:connector_id>/opc-classic/read')
+@login_required
+def opc_classic_read(connector_id):
+ c=connector_for_tenant(connector_id)
+ if c.connector_type!='OPC_CLASSIC':abort(404)
+ items=list(dict.fromkeys([x.strip()[:300] for x in request.form.get('item_ids','').splitlines() if x.strip()]))[:100]
+ if not items:flash('Enter at least one OPC DA Item ID.','error')
+ else:queue_opc_classic(c,'opc_classic_read_request','READ',{'item_ids':items});flash('Bounded OPC DA read test queued.','ok')
+ return redirect(url_for('main.opc_classic_studio',connector_id=c.id))
+@bp.post('/integrations/<int:connector_id>/opc-classic/mappings')
+@login_required
+def opc_classic_mapping(connector_id):
+ c=connector_for_tenant(connector_id);asset=Asset.query.filter_by(id=request.form.get('asset_id',type=int),customer_id=tenant_id()).first();signal=SignalDefinition.query.filter_by(id=request.form.get('signal_id',type=int),customer_id=tenant_id()).first();item=request.form.get('item_id','').strip()[:300];dtype=request.form.get('data_type','FLOAT32').upper()
+ if c.connector_type!='OPC_CLASSIC' or not asset or not signal or signal.asset_id!=asset.id or not item or dtype not in OPC_CLASSIC_DATA_TYPES:abort(400)
+ source='opcda:item:'+item;m=UniversalSourceMapping.query.filter_by(connector_id=c.id,source_path=source,signal_id=signal.id).first() or UniversalSourceMapping(customer_id=tenant_id(),connector_id=c.id,asset_id=asset.id,signal_id=signal.id,source_path=source);m.data_type=dtype;m.scale=float(request.form.get('scale') or 1);m.offset=float(request.form.get('offset') or 0);m.enabled=True;db.session.add(m);db.session.commit();flash('OPC DA tag mapping saved.','ok');return redirect(url_for('main.opc_classic_studio',connector_id=c.id))
+@bp.get('/api/v1/edge/opc-classic/<int:connector_id>/runtime-config')
+def opc_classic_runtime_api(connector_id):
+ token=request.headers.get('Authorization','').removeprefix('Bearer ').strip();g=EdgeGateway.query.filter_by(api_token=token,active=True).first()
+ if not g:return jsonify(error='unauthorized'),401
+ c=IntegrationConnector.query.filter_by(id=connector_id,customer_id=g.customer_id,edge_gateway_id=g.gateway_uid,connector_type='OPC_CLASSIC').first()
+ if not c:return jsonify(error='connector_not_assigned'),403
+ x=dict(c.config_json or {});keys=('opc_classic_preflight_request','opc_classic_servers_request','opc_classic_browse_request','opc_classic_read_request');job=next((x[k] for k in keys if isinstance(x.get(k),dict) and x[k].get('status')=='PENDING'),None);maps=[]
+ for m in UniversalSourceMapping.query.filter_by(customer_id=g.customer_id,connector_id=c.id,enabled=True).all():
+  if m.source_path.startswith('opcda:item:'):maps.append({'mapping_id':m.id,'source_path':m.source_path,'item_id':m.source_path.split(':',2)[2],'data_type':m.data_type,'scale':float(m.scale or 1),'offset':float(m.offset or 0)})
+ return jsonify(connector_id=c.id,config=opc_classic_cfg(c),work_request=job,mappings=maps,windows_only=True,read_only=True,allow_write=False,allow_control=False,allow_alarm_ack=False)
+@bp.post('/api/v1/edge/opc-classic/<int:connector_id>/result')
+def opc_classic_result_api(connector_id):
+ token=request.headers.get('Authorization','').removeprefix('Bearer ').strip();g=EdgeGateway.query.filter_by(api_token=token,active=True).first()
+ if not g:return jsonify(error='unauthorized'),401
+ c=IntegrationConnector.query.filter_by(id=connector_id,customer_id=g.customer_id,edge_gateway_id=g.gateway_uid,connector_type='OPC_CLASSIC').first()
+ if not c:return jsonify(error='connector_not_assigned'),403
+ d=request.get_json(silent=True) or {}
+ if d.get('read_only') is not True:return jsonify(error='read_only_required'),403
+ x=dict(c.config_json or {});rid=str(d.get('request_id',''));pairs=(('opc_classic_preflight_request','opc_classic_preflight_result'),('opc_classic_servers_request','opc_classic_servers_result'),('opc_classic_browse_request','opc_classic_browse_result'),('opc_classic_read_request','opc_classic_read_result'));found=next(((k,r) for k,r in pairs if isinstance(x.get(k),dict) and x[k].get('request_id')==rid),None)
+ if not found:return jsonify(error='request_mismatch'),409
+ key,result_key=found;ok=bool(d.get('success'));x[key]={**x[key],'status':'COMPLETED' if ok else 'ERROR','completed_at':utcnow().isoformat(),'error':str(d.get('error',''))[:500] or None}
+ if ok:x[result_key]=d.get('result') or []
+ c.config_json=x;c.status='CONNECTED' if ok else 'ERROR';c.last_tested_at=utcnow();c.last_error=None if ok else str(d.get('error',''))[:500];db.session.commit();return jsonify(status='accepted'),202
+
+# Part 11 Universal Runtime Diagnostics & Production Tests
+@bp.get('/integrations/runtime-diagnostics')
+@login_required
+def universal_runtime_diagnostics():
+ from .universal_diagnostics import tenant_report
+ report=tenant_report(tenant_id());events=IntegrationEvent.query.filter_by(customer_id=tenant_id()).order_by(IntegrationEvent.created_at.desc()).limit(100).all();jobs=IntegrationJobEvent.query.filter_by(customer_id=tenant_id()).order_by(IntegrationJobEvent.created_at.desc()).limit(100).all();return render_template('universal_runtime_diagnostics.html',report=report,events=events,jobs=jobs)
+@bp.get('/integrations/runtime-diagnostics/report.json')
+@login_required
+def universal_runtime_report():
+ from .universal_diagnostics import tenant_report
+ return jsonify(tenant_report(tenant_id()))
+@bp.post('/integrations/runtime-diagnostics/run-tests')
+@login_required
+def universal_runtime_run_tests():
+ from .universal_diagnostics import tenant_report
+ r=tenant_report(tenant_id());status='OK' if r['counts']['fail']==0 and r['safety']['all_read_only'] else 'FAILED';db.session.add(IntegrationEvent(customer_id=tenant_id(),connector_id=None,event_type='UNIVERSAL_PRODUCTION_TEST',status=status,detail=f"{r['report_id']}; score={r['overall_score']}; fail={r['counts']['fail']}"));db.session.commit();flash('Production test completed. No process writes were performed.','ok' if status=='OK' else 'error');return redirect(url_for('main.universal_runtime_diagnostics'))
