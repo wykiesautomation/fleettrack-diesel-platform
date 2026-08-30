@@ -892,41 +892,21 @@ def _distance_km(a,b):
     return 2*6371.0088*math.asin(min(1,math.sqrt(value)))
 
 def analyse_tracking_points(rows):
-    """Historical adapter using the same strict evidence engine as Safety Twin."""
-    strict = analyse_safety_twin_points(rows)
-    rejected = list(strict['rejected']) + list(strict.get('low_quality', [])) + [dict(item, reason='STATIONARY_DRIFT') for item in strict['drift']]
-    rejection_counts = {}
-    for item in rejected:
-        reason = item.get('reason', 'REJECTED')
-        rejection_counts[reason] = rejection_counts.get(reason, 0) + 1
-    accepted = list(strict['movement'])
-    segments = [accepted] if len(accepted) > 1 else []
-    return {
-        'points': accepted,
-        'last': (accepted[-1] if accepted else (strict['drift'][-1] if strict['drift'] else None)),
-        'accepted': accepted,
-        'rejected': rejected,
-        'segments': segments,
-        'journeys': [],
-        'stops': [],
-        'total_km': strict['distance_km'],
-        'distance_km': strict['distance_km'],
-        'max_speed': strict['maximum_speed'],
-        'maximum_speed': strict['maximum_speed'],
-        'moving_minutes': strict['movement_minutes'],
-        'movement_minutes': strict['movement_minutes'],
-        'stopped_minutes': strict['stationary_minutes'],
-        'stationary_minutes': strict['stationary_minutes'],
-        'rejection_counts': rejection_counts,
-        'confidence': strict['confidence'],
-        'state': strict['state'],
-        'raw_count': strict['raw_count'],
-        'movement_count': strict['movement_count'],
-        'drift_count': strict['drift_count'],
-        'rejected_count': strict['rejected_count'] + strict.get('low_quality_count', 0),
-        'low_quality_count': strict.get('low_quality_count', 0),
-        'raw_speed': (strict['raw'][-1]['speed'] if strict['raw'] else None),
-    }
+    """Build route-safe historical segments from the shared strict validator."""
+    strict=analyse_safety_twin_points(rows);accepted_by_time={x['timestamp']:x for x in strict['movement']};rejected=[];rejection_counts={};route_segments=[];segments=route_segments;current=[];previous=None
+    for row in rows:
+        stamp=aware(row.sampled_at).isoformat();point=accepted_by_time.get(stamp)
+        if point:current.append(point);previous=point
+        else:
+            reason='POOR_ACCURACY' if row.accuracy_m is not None and row.accuracy_m>50 else 'STATIONARY_DRIFT';rejected.append({'timestamp':stamp,'latitude':row.latitude,'longitude':row.longitude,'accuracy':row.accuracy_m,'speed':row.speed_kmh,'reason':reason});rejection_counts[reason]=rejection_counts.get(reason,0)+1
+            if current:segments.append(current);current=[]
+            previous=None
+    if current:route_segments.append(current)
+    distance=0.0
+    for segment in route_segments:
+        total=sum(_distance_dict(x,y) for x,y in zip(segment,segment[1:]));distance+=total
+    accepted=[point for segment in route_segments for point in segment]
+    return {'points':accepted,'last':accepted[-1] if accepted else (strict['drift'][-1] if strict['drift'] else None),'accepted':accepted,'rejected':rejected,'segments':route_segments,'journeys':[],'stops':[],'total_km':round(distance,2),'distance_km':round(distance,2),'max_speed':strict['maximum_speed'],'maximum_speed':strict['maximum_speed'],'moving_minutes':strict['movement_minutes'],'movement_minutes':strict['movement_minutes'],'stopped_minutes':strict['stationary_minutes'],'stationary_minutes':strict['stationary_minutes'],'rejection_counts':rejection_counts,'confidence':strict['confidence'],'state':strict['state'],'raw_count':strict['raw_count'],'movement_count':len(accepted),'drift_count':strict['drift_count'],'rejected_count':len(rejected),'low_quality_count':strict.get('low_quality_count',0),'raw_speed':strict['raw'][-1]['speed'] if strict['raw'] else None}
 
 def _distance_dict(a,b):
     import math
@@ -2076,7 +2056,8 @@ def mobile_event():
         sequence=str(data.get('sequence') or '').strip()[:140]
         if not sequence:return jsonify(error='sequence_required'),400
         existing=Live360SafetyEvent.query.filter_by(sequence=sequence).first()
-        if existing:return jsonify(status='duplicate',event_id=existing.id),200
+        if existing:
+            detail=dict(existing.detail_json or {});return jsonify(status='duplicate',event_id=existing.id,event_type=existing.event_type,event_status=existing.status,cancel_deadline=detail.get('cancel_deadline')),200
         def bounded(name,low,high,default=None):
             value=data.get(name,default)
             if value is None:return None
@@ -2092,7 +2073,10 @@ def mobile_event():
         row=Live360SafetyEvent(customer_id=device.customer_id,asset_id=device.asset_id,device_id=device.id,event_type=event,severity=severity,confidence=confidence,status=status,sampled_at=sampled,latitude=lat,longitude=lon,accuracy_m=accuracy,speed_before_kmh=before,speed_after_kmh=after,peak_acceleration_ms2=peak,deceleration_ms2=decel,sequence=sequence,detail_json={'client_version':str(data.get('client_version') or '')[:40],'detection_version':'phone-motion-safety-2.0','roll_deg':bounded('roll_deg',-180,180),'pitch_deg':bounded('pitch_deg',-180,180),'motion_source':str(data.get('motion_source') or 'PHONE_WEB')[:30],'candidate_only':event in ('POSSIBLE_ACCIDENT','ABNORMAL_TILT','UNEXPECTED_MOVEMENT')})
         db.session.add(row);db.session.flush();from .mobile_safety import confirmation;confirmation(row,data,device);audit(device.customer_id,event,device.asset_id,device.id,'DEVICE',None,f'{event.replace("_"," ").title()} advisory received')
     else:return jsonify(error='unsupported_event'),422
-    db.session.commit();return jsonify(status='accepted'),202
+    db.session.commit();
+    if 'row' in locals() and isinstance(row,Live360SafetyEvent):
+        detail=dict(row.detail_json or {});return jsonify(status='accepted',event_id=row.id,event_type=row.event_type,event_status=row.status,cancel_deadline=detail.get('cancel_deadline'),cancel_seconds=int(detail.get('cancel_seconds') or 30)),202
+    return jsonify(status='accepted'),202
 
 @bp.route('/fleet-feature-settings',methods=['GET','POST'])
 @login_required

@@ -115,12 +115,30 @@ def rotate_token():
 def cancel_event(event_id):
  device=device_auth()
  if not device:return jsonify(error='invalid_mobile_tracker_token'),401
- event=Live360SafetyEvent.query.filter_by(id=event_id,customer_id=device.customer_id,device_id=device.id).first_or_404();deadline=(event.detail_json or {}).get('cancel_deadline')
- if event.status!='CONFIRMATION_PENDING' or (deadline and now()>datetime.fromisoformat(deadline)):return jsonify(error='event_not_cancellable'),409
- event.status='CANCELLED_BY_USER';db.session.commit();return jsonify(status='cancelled'),200
+ event=Live360SafetyEvent.query.filter_by(id=event_id,customer_id=device.customer_id,device_id=device.id,asset_id=device.asset_id).first_or_404();detail=dict(event.detail_json or {});deadline=detail.get('cancel_deadline')
+ if event.event_type!='POSSIBLE_ACCIDENT' or event.status!='CONFIRMATION_PENDING' or (deadline and now()>datetime.fromisoformat(deadline)):return jsonify(error='event_not_cancellable'),409
+ cancelled_at=now();event.status='CANCELLED_BY_USER';detail.update({'cancelled_at':cancelled_at.isoformat(),'cancelled_by':'PHONE_USER','confirmation_stopped':True});event.detail_json=detail;db.session.commit();return jsonify(status='cancelled',event_id=event.id,event_status=event.status,cancelled_at=cancelled_at.isoformat()),200
 @motion_bp.post('/safety-events/<int:event_id>/acknowledge')
 @login_required
 def acknowledge(event_id):
  event=Live360SafetyEvent.query.filter_by(id=event_id,customer_id=current_user.customer_id).first_or_404();state=SafetyNotificationState.query.filter_by(event_id=event.id).first()
  if state:state.state='ACKNOWLEDGED';state.acknowledged_at=now();state.acknowledged_by=current_user.id
  event.status='ACKNOWLEDGED';db.session.add(SecurityAuditEvent(customer_id=event.customer_id,asset_id=event.asset_id,device_id=event.device_id,event_type='SAFETY_EVENT_ACKNOWLEDGED',actor_type='USER',actor_id=current_user.id,safe_summary=f'Event {event.id} acknowledged; escalation stopped'));db.session.commit();return jsonify(status='acknowledged'),200
+
+
+def reevaluate_pending_safety_events(limit=50):
+ due=Live360SafetyEvent.query.filter(Live360SafetyEvent.status=='CONFIRMATION_PENDING',Live360SafetyEvent.event_type.in_(['POSSIBLE_ACCIDENT','ABNORMAL_TILT'])).order_by(Live360SafetyEvent.sampled_at).limit(limit).all();processed=0
+ for event in due:
+  detail=dict(event.detail_json or {});deadline=detail.get('cancel_deadline')
+  if deadline:
+   try:
+    if now()<datetime.fromisoformat(deadline):continue
+   except ValueError:pass
+  device=db.session.get(Device,event.device_id)
+  if not device or not device.active:event.status='INSUFFICIENT_EVIDENCE';processed+=1;continue
+  original=event.event_type;confirmation(event,detail,device)
+  if event.status=='CONFIRMATION_PENDING':
+   locations,samples=evidence(event);event.status='UNCONFIRMED' if locations or samples else 'INSUFFICIENT_EVIDENCE';detail=dict(event.detail_json or {});detail['evaluated_at']=now().isoformat();detail['evaluation_version']='motion-safety-3.1';event.detail_json=detail
+  if event.status=='CONFIRMED':db.session.add(SecurityAuditEvent(customer_id=event.customer_id,asset_id=event.asset_id,device_id=event.device_id,event_type='SAFETY_CANDIDATE_FINALISED',actor_type='SYSTEM',safe_summary=f'{original} finalised as {event.event_type}'))
+  processed+=1
+ db.session.commit();return processed
