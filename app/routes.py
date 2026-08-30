@@ -451,25 +451,14 @@ def _record_attempt(email,action,accepted=False):
     db.session.add(RegistrationAttempt(email_hash=_privacy_hash(email),ip_hash=_privacy_hash(_client_ip()),action=action,accepted=accepted))
 
 def _attempt_count(email,action,minutes,by_ip=False):
-    # Lockout is based only on failed attempts. Successful logins must never
-    # accumulate toward a future lockout, especially behind a shared public IP.
     cutoff=utcnow()-timedelta(minutes=minutes)
-    query=RegistrationAttempt.query.filter(
-        RegistrationAttempt.action==action,
-        RegistrationAttempt.accepted.is_(False),
-        RegistrationAttempt.created_at>=cutoff,
-    )
+    query=RegistrationAttempt.query.filter(RegistrationAttempt.action==action,RegistrationAttempt.accepted.is_(False),RegistrationAttempt.created_at>=cutoff)
     key=_privacy_hash(_client_ip()) if by_ip else _privacy_hash(email)
     return query.filter(RegistrationAttempt.ip_hash==key if by_ip else RegistrationAttempt.email_hash==key).count()
 
 def _clear_failed_login_attempts(email):
-    email_hash=_privacy_hash(email)
-    ip_hash=_privacy_hash(_client_ip())
-    RegistrationAttempt.query.filter(
-        RegistrationAttempt.action=='LOGIN',
-        RegistrationAttempt.accepted.is_(False),
-        (RegistrationAttempt.email_hash==email_hash) | (RegistrationAttempt.ip_hash==ip_hash),
-    ).delete(synchronize_session=False)
+    email_hash=_privacy_hash(email);ip_hash=_privacy_hash(_client_ip())
+    RegistrationAttempt.query.filter(RegistrationAttempt.action=='LOGIN',RegistrationAttempt.accepted.is_(False),((RegistrationAttempt.email_hash==email_hash)|(RegistrationAttempt.ip_hash==ip_hash))).delete(synchronize_session=False)
 
 def _verification_serializer():
     return URLSafeTimedSerializer(current_app.config['SECRET_KEY'],salt='assettrack360-email-verification-v1')
@@ -551,12 +540,8 @@ def login():
         if valid and not u.email_verified:
             flash('Your email address has not been verified. Request a new verification email below.','error');return render_template('auth.html',mode='login',pending_email=email)
         if valid:
-            # A valid login immediately clears previous failed-attempt lockout state.
-            _clear_failed_login_attempts(email)
-            db.session.commit()
-            # Remove stale onboarding/session values before establishing a fresh identity.
-            session.clear()
-            login_user(u, fresh=True)
+            _clear_failed_login_attempts(email);db.session.commit()
+            session.clear();login_user(u,fresh=True)
             return redirect(url_for('admin.dashboard') if u.role=='platform_admin' else url_for('main.dashboard'))
         flash('Invalid login.','error')
     return render_template('auth.html',mode='login')
@@ -1726,6 +1711,13 @@ def account():
     )
 
 
+def _connected_device_for_profile(customer_id,profile_code):
+    matches=[]
+    for device in Device.query.filter_by(customer_id=customer_id,active=True).order_by(Device.id).all():
+        resolved=profile_for_device(device)
+        if resolved and resolved.get('code')==profile_code:matches.append(device)
+    return matches[0] if len(matches)==1 else None
+
 @bp.route('/devices/connect',methods=['GET','POST'])
 @login_required
 def connect_device():
@@ -1766,6 +1758,15 @@ def connect_device():
             if kind=='ANDROID_PHONE' and asset.asset_type!='TRACKER':
                 flash('Android Phone can only be connected to a tracking asset.','error');return redirect(url_for('main.connect_device',asset_id=asset.id))
         if kind=='HARDWARE_PROFILE':
+            existing_connected=_connected_device_for_profile(customer_id,profile['code'])
+            if asset.asset_type=='TANK' and existing_connected:
+                metadata=dict(asset.metadata_json or {});metadata.update({'onboarding_source':'EXISTING_CONNECTED_DEVICE','profile_code':profile['code'],'shared_device_id':existing_connected.id,'claim_state':'ALREADY_CONNECTED'});asset.metadata_json=metadata
+                ensure_profile_signals(asset,profile)
+                MobileTrackerRegistration.query.filter_by(customer_id=customer_id,asset_id=asset.id,used_at=None).delete(synchronize_session=False)
+                db.session.commit()
+                for key in ('onboarding_registration_id','onboarding_registration_code','onboarding_device_kind','onboarding_profile_code','onboarding_solution_profile'):session.pop(key,None)
+                flash(f'{existing_connected.device_uid} is already connected. No new claim code is required. Assign an analogue input to this tank now.','ok')
+                return redirect(url_for('device_api.io_studio',device_id=existing_connected.id,target_asset_id=asset.id))
             metadata=dict(asset.metadata_json or {})
             metadata.update({'onboarding_source':'DEVICE_CENTRE','profile_code':profile['code'],'claim_state':'WAITING'})
             metadata.pop('primary_solution_profile',None)
@@ -1797,6 +1798,15 @@ def connect_device_waiting():
     reg_id=session.get('onboarding_registration_id');code=session.get('onboarding_registration_code')
     reg=MobileTrackerRegistration.query.filter_by(id=reg_id,customer_id=tenant_id()).first() if reg_id else None
     if not reg or not code:return redirect(url_for('main.connect_device'))
+    if not reg.used_at and ((reg.onboarding_kind=='HARDWARE') or bool(reg.profile_code)) and reg.asset and reg.asset.asset_type=='TANK':
+        existing_connected=_connected_device_for_profile(tenant_id(),reg.profile_code)
+        if existing_connected:
+            reg.provisioning_state='REUSED_EXISTING';reg.used_at=utcnow()
+            metadata=dict(reg.asset.metadata_json or {});metadata.update({'onboarding_source':'EXISTING_CONNECTED_DEVICE','profile_code':reg.profile_code,'shared_device_id':existing_connected.id,'claim_state':'ALREADY_CONNECTED'});reg.asset.metadata_json=metadata
+            db.session.commit()
+            for key in ('onboarding_registration_id','onboarding_registration_code','onboarding_device_kind','onboarding_profile_code','onboarding_solution_profile'):session.pop(key,None)
+            flash(f'{existing_connected.device_uid} is already online. The unnecessary claim was cancelled. Assign the tank level input now.','ok')
+            return redirect(url_for('device_api.io_studio',device_id=existing_connected.id,target_asset_id=reg.asset_id))
     if reg.used_at:return redirect(url_for('main.devices'))
     remaining_seconds=max(0,int((aware(reg.expires_at)-utcnow()).total_seconds()))
     if (session.get('onboarding_device_kind') or ('HARDWARE_PROFILE' if reg.onboarding_kind=='HARDWARE' else 'ANDROID_PHONE')) == 'HARDWARE_PROFILE':
