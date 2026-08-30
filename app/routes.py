@@ -451,10 +451,25 @@ def _record_attempt(email,action,accepted=False):
     db.session.add(RegistrationAttempt(email_hash=_privacy_hash(email),ip_hash=_privacy_hash(_client_ip()),action=action,accepted=accepted))
 
 def _attempt_count(email,action,minutes,by_ip=False):
+    # Lockout is based only on failed attempts. Successful logins must never
+    # accumulate toward a future lockout, especially behind a shared public IP.
     cutoff=utcnow()-timedelta(minutes=minutes)
-    query=RegistrationAttempt.query.filter(RegistrationAttempt.action==action,RegistrationAttempt.created_at>=cutoff)
+    query=RegistrationAttempt.query.filter(
+        RegistrationAttempt.action==action,
+        RegistrationAttempt.accepted.is_(False),
+        RegistrationAttempt.created_at>=cutoff,
+    )
     key=_privacy_hash(_client_ip()) if by_ip else _privacy_hash(email)
     return query.filter(RegistrationAttempt.ip_hash==key if by_ip else RegistrationAttempt.email_hash==key).count()
+
+def _clear_failed_login_attempts(email):
+    email_hash=_privacy_hash(email)
+    ip_hash=_privacy_hash(_client_ip())
+    RegistrationAttempt.query.filter(
+        RegistrationAttempt.action=='LOGIN',
+        RegistrationAttempt.accepted.is_(False),
+        (RegistrationAttempt.email_hash==email_hash) | (RegistrationAttempt.ip_hash==ip_hash),
+    ).delete(synchronize_session=False)
 
 def _verification_serializer():
     return URLSafeTimedSerializer(current_app.config['SECRET_KEY'],salt='assettrack360-email-verification-v1')
@@ -536,9 +551,12 @@ def login():
         if valid and not u.email_verified:
             flash('Your email address has not been verified. Request a new verification email below.','error');return render_template('auth.html',mode='login',pending_email=email)
         if valid:
+            # A valid login immediately clears previous failed-attempt lockout state.
+            _clear_failed_login_attempts(email)
+            db.session.commit()
             # Remove stale onboarding/session values before establishing a fresh identity.
             session.clear()
-            login_user(u)
+            login_user(u, fresh=True)
             return redirect(url_for('admin.dashboard') if u.role=='platform_admin' else url_for('main.dashboard'))
         flash('Invalid login.','error')
     return render_template('auth.html',mode='login')
