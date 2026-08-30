@@ -2,7 +2,7 @@ REQUIRED_PROFILE_KEYS={"code","display_name","device_type","asset_type","transpo
 REQUIRED_CHANNEL_KEYS={"key","label","signal_type","source_type","unit","widget","direction"}
 VALID_DIRECTIONS={"INPUT","OUTPUT","HEALTH","LOCATION"}
 
-def analog_channel(key,label,source_type,unit="%",raw_min=0.0,raw_max=3.3,eng_min=0.0,eng_max=100.0):
+def analog_channel(key,label,source_type,unit="%",raw_min=0.0,raw_max=100.0,eng_min=0.0,eng_max=100.0):
  return {"key":key,"label":label,"signal_type":"CUSTOM","source_type":source_type,"unit":unit,"widget":"numeric","direction":"INPUT","calibratable":True,"defaults":{"calibration_mode":"LINEAR","raw_min":raw_min,"raw_max":raw_max,"eng_min":eng_min,"eng_max":eng_max,"offset":0.0,"filter_alpha":1.0,"deadband":0.0,"critical_low":None,"warning_low":None,"warning_high":None,"critical_high":None}}
 
 def input_channel(key,label,signal_type,source_type,unit="",widget="status"):

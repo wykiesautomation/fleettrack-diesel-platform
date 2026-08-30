@@ -1047,6 +1047,24 @@ def asset_view(asset_id):
     for signal in signals:
         latest=latest_reading(signal.id);history=Reading.query.filter_by(signal_id=signal.id).order_by(desc(Reading.sampled_at)).limit(48).all()[::-1];lookup[signal.key]=latest;cards.append({'signal':signal,'latest':latest,'history':history,'has_data':bool(latest),'selected_now':bool((signal.config_json or {}).get('selected_in_last_payload',False)),'last_sampled_at':aware(latest.sampled_at).isoformat() if latest else None})
         if history and active_device and signal_trend_enabled(active_device,signal):series.append({'key':signal.key,'label':signal.label,'unit':signal.unit or '','values':[{'time':aware(r.sampled_at).strftime('%H:%M'),'value':r.value} for r in history]})
+    # Universal combined dashboard: tracking and every assigned, supported process point coexist.
+    profile_context=device_profile_context(active_device) if active_device else {'channels':[],'output_channels':[],'capabilities':[]}
+    profile_channels={str(ch.get('key') or '').lower():ch for ch in (profile_context.get('channels') or []) if isinstance(ch,dict)}
+    mobile_types={'MOBILE_WEB_TRACKER','ANDROID_MOBILE_TRACKER','MOBILE_TRACKER','IOS_MOBILE_TRACKER'}
+    mobile_device=bool(active_device and str(active_device.device_type or '').upper() in mobile_types)
+    mobile_standard_keys={'gps_location','speed_kmh','heading','gps_accuracy_m','battery_percent','charging_status','last_contact','sos_event'}
+    assigned_keys=set()
+    if active_device:
+        assigned_keys={str(row.channel_key or '').lower() for row in DeviceChannelAssignment.query.filter_by(device_id=active_device.id,asset_id=asset.id,enabled=True).all()}
+    universal_signal_cards=[]
+    for card in cards:
+        sig=card['signal'];key=str(sig.key or '').lower();spec=profile_channels.get(key,{})
+        direction=str(spec.get('direction') or (sig.config_json or {}).get('direction') or sig.signal_type or 'INPUT').upper()
+        diagnostic=bool(spec.get('diagnostic_only')) or direction in {'HEALTH','LOCATION'} or key.endswith(('_volts','_raw'))
+        output=direction=='OUTPUT' or str(sig.signal_type or '').upper() in {'OUTPUT','DIGITAL_OUTPUT'}
+        assigned=key in assigned_keys or bool((sig.config_json or {}).get('device_id')) or not active_device
+        if assigned and not diagnostic and not output and not (mobile_device and key in mobile_standard_keys):
+            universal_signal_cards.append({**card,'direction':direction,'capability':spec.get('signal_type') or sig.signal_type,'waiting':not bool(card.get('latest'))})
     # Monitoring visuals must use a configured process signal, never the first arbitrary reading.
     # Raw *_volts channels remain available for diagnostics/calibration but are not valid
     # engineering-value sources for Temperature, Flow, Pressure, or Totalizer visuals.
@@ -1179,7 +1197,7 @@ def asset_view(asset_id):
         or 'SIM808' in firmware_identity
         or 'SIM808' in profile_code
     ))
-    return render_template('asset.html',asset=asset,signal_cards=cards,signal_lookup=lookup,chart_series=series,alarms=alarms,open_alarms=open_alarms,device=device,location=location,route_points=route,last_contact=last,generated_at=now,context=ctx,tank_stats=tank,tracking_stats=track,vibration_stats=vib,phone_battery=phone_battery,vehicle_summary=vehicle_summary,route_health=route_health,output_command=output_command,device_profile=device_profile,last_known_address=last_known_address,operational_battery=operational_battery,trend_policy=active_trend_policy,tank_orientation=tank_orientation,monitoring_visual=(asset.metadata_json or {}).get('monitoring_visual','EASY_TANK' if asset.asset_type=='TANK' else 'GENERAL_MONITORING'),visual_signal_candidates=visual_signal_candidates,primary_visual_signal=primary_visual_signal,primary_visual_card=primary_visual_card,primary_trend_selected=primary_trend_selected,primary_trend_points=primary_trend_points,has_location_capability=has_location_capability,valid_location=valid_location,output_feedback_verified=output_feedback_verified,asset_connectivity=asset_connectivity,sim808_profile=sim808_profile)
+    return render_template('asset.html',asset=asset,signal_cards=cards,signal_lookup=lookup,chart_series=series,alarms=alarms,open_alarms=open_alarms,device=device,location=location,route_points=route,last_contact=last,generated_at=now,context=ctx,tank_stats=tank,tracking_stats=track,vibration_stats=vib,phone_battery=phone_battery,vehicle_summary=vehicle_summary,route_health=route_health,output_command=output_command,device_profile=device_profile,last_known_address=last_known_address,operational_battery=operational_battery,trend_policy=active_trend_policy,tank_orientation=tank_orientation,monitoring_visual=(asset.metadata_json or {}).get('monitoring_visual','EASY_TANK' if asset.asset_type=='TANK' else 'GENERAL_MONITORING'),visual_signal_candidates=visual_signal_candidates,primary_visual_signal=primary_visual_signal,primary_visual_card=primary_visual_card,primary_trend_selected=primary_trend_selected,primary_trend_points=primary_trend_points,has_location_capability=has_location_capability,valid_location=valid_location,output_feedback_verified=output_feedback_verified,asset_connectivity=asset_connectivity,sim808_profile=sim808_profile,universal_signal_cards=universal_signal_cards)
 
 
 
@@ -1483,6 +1501,30 @@ def signals(asset_id):
     advanced_access=has_advanced_access(asset.customer_id,device)
     if request.method=='POST' and not advanced_access:
         abort(403)
+    def validate_calibration(sig,channel):
+        if sig.raw_min is None or sig.raw_max is None or sig.raw_max<=sig.raw_min:
+            raise ValueError(f'{sig.label}: Raw maximum must be greater than raw minimum.')
+        if sig.eng_min is None or sig.eng_max is None or sig.eng_max==sig.eng_min:
+            raise ValueError(f'{sig.label}: Engineering range cannot be zero.')
+        cfg=dict(sig.config_json or {});key=str(sig.key or '').lower()
+        if key.startswith('analog_') and not key.endswith(('_volts','_raw')):
+            cfg['calibration_source']='NORMALIZED_PERCENT'
+            if sig.raw_min<0 or sig.raw_max>100:
+                raise ValueError(f'{sig.label}: Normalized analog source must stay within 0 to 100.')
+        elif key.endswith('_volts'):
+            cfg['calibration_source']='VOLTAGE'
+            if sig.raw_min<0 or sig.raw_max>3.3:
+                raise ValueError(f'{sig.label}: Protected voltage source must stay within 0 to 3.3 V.')
+        source=str(cfg.get('calibration_source') or '').upper()
+        if source=='RAW_ADC' and (sig.raw_min<0 or sig.raw_max>4095):
+            raise ValueError(f'{sig.label}: 12-bit ADC source must stay within 0 to 4095.')
+        if source in {'4_20MA','4-20MA'} and (sig.raw_min<4 or sig.raw_max>20):
+            raise ValueError(f'{sig.label}: Conditioned 4-20 mA source must stay within 4 to 20 mA.')
+        ordered=[v for v in (sig.critical_low,sig.warning_low,sig.warning_high,sig.critical_high) if v is not None]
+        if ordered!=sorted(ordered):
+            raise ValueError(f'{sig.label}: Alarm order must be LL <= L <= H <= HH.')
+        sig.config_json=cfg
+
     if request.method=='POST':
         action=request.form.get('action','add')
         if action=='save_all_calibrations':
@@ -1508,8 +1550,7 @@ def signals(asset_id):
                     sig.raw_min=f('raw_min',sig.raw_min);sig.raw_max=f('raw_max',sig.raw_max);sig.eng_min=f('eng_min',sig.eng_min);sig.eng_max=f('eng_max',sig.eng_max)
                     sig.offset=f('offset',sig.offset or 0);sig.filter_alpha=max(0.01,min(1.0,f('filter_alpha',sig.filter_alpha or 1)));sig.deadband=max(0,f('deadband',sig.deadband or 0))
                     sig.critical_low=f('critical_low',None);sig.warning_low=f('warning_low',None);sig.warning_high=f('warning_high',None);sig.critical_high=f('critical_high',None)
-                    ordered=[x for x in (sig.critical_low,sig.warning_low,sig.warning_high,sig.critical_high) if x is not None]
-                    if ordered!=sorted(ordered):raise ValueError(f'{sig.label}: alarm order must be LL <= L <= H <= HH')
+                    validate_calibration(sig,channel)
                     if sig.calibration_mode=='LINEAR' and float(sig.raw_max)==float(sig.raw_min):raise ValueError(f'{sig.label}: raw maximum must differ from raw minimum')
                     cfg=dict(sig.config_json or {})
                     if request.form.get(prefix+'tank_strapping_enabled')=='on':
@@ -1531,33 +1572,39 @@ def signals(asset_id):
                 db.session.rollback();current_app.logger.exception('Save all calibration failed asset_id=%s',asset.id);flash('Calibration save failed safely. No partial changes were saved.','error')
             return redirect(url_for('main.signals',asset_id=asset.id,open='all'))
         if action in ('save_calibration','restore_defaults'):
-            sig=SignalDefinition.query.filter_by(id=request.form.get('signal_id',type=int),asset_id=asset.id,customer_id=tenant_id()).first_or_404()
-            channel=channel_profile_default(device,sig.key)
-            if not channel or not channel.get('calibratable'):abort(400)
-            defaults=channel.get('defaults',{})
-            if action=='restore_defaults':
-                sig.label=channel['label'];sig.unit=channel.get('unit','');sig.calibration_mode=defaults.get('calibration_mode','LINEAR');sig.raw_min=defaults.get('raw_min',0);sig.raw_max=defaults.get('raw_max',100);sig.eng_min=defaults.get('eng_min',0);sig.eng_max=defaults.get('eng_max',100);sig.offset=defaults.get('offset',0);sig.filter_alpha=defaults.get('filter_alpha',1);sig.deadband=defaults.get('deadband',0);sig.critical_low=defaults.get('critical_low');sig.warning_low=defaults.get('warning_low');sig.warning_high=defaults.get('warning_high');sig.critical_high=defaults.get('critical_high')
-            else:
-                def f(name,current=None):
-                    value=request.form.get(name,'').strip();return current if value=='' else float(value)
-                sig.label=request.form.get('label',sig.label).strip()[:100] or sig.label;sig.unit=request.form.get('unit',sig.unit).strip()[:20];sig.calibration_mode=request.form.get('calibration_mode','LINEAR').upper();sig.raw_min=f('raw_min',sig.raw_min);sig.raw_max=f('raw_max',sig.raw_max);sig.eng_min=f('eng_min',sig.eng_min);sig.eng_max=f('eng_max',sig.eng_max);sig.offset=f('offset',sig.offset or 0);sig.filter_alpha=max(0.01,min(1.0,f('filter_alpha',sig.filter_alpha or 1)));sig.deadband=max(0,f('deadband',sig.deadband or 0));sig.critical_low=f('critical_low',None);sig.warning_low=f('warning_low',None);sig.warning_high=f('warning_high',None);sig.critical_high=f('critical_high',None)
-                ordered=[x for x in (sig.critical_low,sig.warning_low,sig.warning_high,sig.critical_high) if x is not None]
-                if ordered!=sorted(ordered):flash('Alarm order must be LL <= L <= H <= HH.','error');return redirect(url_for('main.signals',asset_id=asset.id))
-                cfg=dict(sig.config_json or {})
-                if request.form.get('tank_strapping_enabled')=='on':
-                    points=[]
-                    try:
-                        for level,volume in zip(request.form.getlist('tank_level'),request.form.getlist('tank_volume')):
-                            if str(level).strip()=='' and str(volume).strip()=='':continue
-                            points.append({'level':float(level),'volume':float(volume)})
-                    except ValueError:flash('Tank strapping points must contain valid numbers.','error');return redirect(url_for('main.signals',asset_id=asset.id))
-                    points=normalize_tank_points(points)
-                    if len(points)<2:flash('Tank strapping requires at least two unique level points.','error');return redirect(url_for('main.signals',asset_id=asset.id))
-                    if any(points[i]['volume']>points[i+1]['volume'] for i in range(len(points)-1)):flash('Tank volume must not decrease as level rises.','error');return redirect(url_for('main.signals',asset_id=asset.id))
-                    cfg['tank_strapping']={'enabled':True,'points':points,'level_unit':request.form.get('tank_level_unit','%')[:20] or '%','volume_unit':request.form.get('tank_volume_unit','L')[:20] or 'L','out_of_range':'CLAMP'}
-                else:cfg.pop('tank_strapping',None)
-                sig.config_json=cfg
-            sig.calibrated_at=utcnow();sig.calibrated_by=current_user.id;db.session.commit();flash('Channel calibration saved.' if action=='save_calibration' else 'Profile defaults restored.','ok');return redirect(url_for('main.signals',asset_id=asset.id))
+            try:
+                sig=SignalDefinition.query.filter_by(id=request.form.get('signal_id',type=int),asset_id=asset.id,customer_id=tenant_id()).first_or_404()
+                channel=channel_profile_default(device,sig.key)
+                if not channel or not channel.get('calibratable'):abort(400)
+                defaults=channel.get('defaults',{})
+                if action=='restore_defaults':
+                    sig.label=channel['label'];sig.unit=channel.get('unit','');sig.calibration_mode=defaults.get('calibration_mode','LINEAR');sig.raw_min=defaults.get('raw_min',0);sig.raw_max=defaults.get('raw_max',100);sig.eng_min=defaults.get('eng_min',0);sig.eng_max=defaults.get('eng_max',100);sig.offset=defaults.get('offset',0);sig.filter_alpha=defaults.get('filter_alpha',1);sig.deadband=defaults.get('deadband',0);sig.critical_low=defaults.get('critical_low');sig.warning_low=defaults.get('warning_low');sig.warning_high=defaults.get('warning_high');sig.critical_high=defaults.get('critical_high')
+                else:
+                    def f(name,current=None):
+                        value=request.form.get(name,'').strip();return current if value=='' else float(value)
+                    sig.label=request.form.get('label',sig.label).strip()[:100] or sig.label;sig.unit=request.form.get('unit',sig.unit).strip()[:20];sig.calibration_mode=request.form.get('calibration_mode','LINEAR').upper();sig.raw_min=f('raw_min',sig.raw_min);sig.raw_max=f('raw_max',sig.raw_max);sig.eng_min=f('eng_min',sig.eng_min);sig.eng_max=f('eng_max',sig.eng_max);sig.offset=f('offset',sig.offset or 0);sig.filter_alpha=max(0.01,min(1.0,f('filter_alpha',sig.filter_alpha or 1)));sig.deadband=max(0,f('deadband',sig.deadband or 0));sig.critical_low=f('critical_low',None);sig.warning_low=f('warning_low',None);sig.warning_high=f('warning_high',None);sig.critical_high=f('critical_high',None)
+                    ordered=[x for x in (sig.critical_low,sig.warning_low,sig.warning_high,sig.critical_high) if x is not None]
+                    if ordered!=sorted(ordered):flash('Alarm order must be LL <= L <= H <= HH.','error');return redirect(url_for('main.signals',asset_id=asset.id))
+                    cfg=dict(sig.config_json or {})
+                    if request.form.get('tank_strapping_enabled')=='on':
+                        points=[]
+                        try:
+                            for level,volume in zip(request.form.getlist('tank_level'),request.form.getlist('tank_volume')):
+                                if str(level).strip()=='' and str(volume).strip()=='':continue
+                                points.append({'level':float(level),'volume':float(volume)})
+                        except ValueError:flash('Tank strapping points must contain valid numbers.','error');return redirect(url_for('main.signals',asset_id=asset.id))
+                        points=normalize_tank_points(points)
+                        if len(points)<2:flash('Tank strapping requires at least two unique level points.','error');return redirect(url_for('main.signals',asset_id=asset.id))
+                        if any(points[i]['volume']>points[i+1]['volume'] for i in range(len(points)-1)):flash('Tank volume must not decrease as level rises.','error');return redirect(url_for('main.signals',asset_id=asset.id))
+                        cfg['tank_strapping']={'enabled':True,'points':points,'level_unit':request.form.get('tank_level_unit','%')[:20] or '%','volume_unit':request.form.get('tank_volume_unit','L')[:20] or 'L','out_of_range':'CLAMP'}
+                    else:cfg.pop('tank_strapping',None)
+                    sig.config_json=cfg
+                validate_calibration(sig,channel)
+                sig.calibrated_at=utcnow();sig.calibrated_by=current_user.id;db.session.commit();flash('Channel calibration saved.' if action=='save_calibration' else 'Profile defaults restored.','ok');return redirect(url_for('main.signals',asset_id=asset.id))
+            except ValueError as exc:
+                db.session.rollback();flash(str(exc)+' No calibration change was saved.','error');return redirect(url_for('main.signals',asset_id=asset.id,open='all'))
+            except Exception:
+                db.session.rollback();current_app.logger.exception('Single-channel calibration failed asset_id=%s',asset.id);flash('Calibration save failed safely. No partial change was saved.','error');return redirect(url_for('main.signals',asset_id=asset.id,open='all'))
         key=slugify(request.form['key']).replace('-','_');record=SignalDefinition(customer_id=tenant_id(),asset_id=asset.id,key=key,label=request.form['label'],signal_type=request.form['signal_type'],source_type=request.form['source_type'],unit=request.form.get('unit',''),widget=request.form['widget'],raw_min=float(request.form.get('raw_min') or 4),raw_max=float(request.form.get('raw_max') or 20),eng_min=float(request.form.get('eng_min') or 0),eng_max=float(request.form.get('eng_max') or 100),warning_low=float(request.form['warning_low']) if request.form.get('warning_low') else None,warning_high=float(request.form['warning_high']) if request.form.get('warning_high') else None,critical_low=float(request.form['critical_low']) if request.form.get('critical_low') else None,critical_high=float(request.form['critical_high']) if request.form.get('critical_high') else None);db.session.add(record);db.session.commit();flash('Signal added.','ok')
     rows=SignalDefinition.query.filter_by(asset_id=asset.id).all();calibration_channels=[{'signal':x,'profile':channel_profile_default(device,x.key)} for x in rows if profile_calibratable(device,x)]
     return render_template('signals.html',asset=asset,signals=rows,device_profile=profile,calibration_channels=calibration_channels,advanced_access=advanced_access)
