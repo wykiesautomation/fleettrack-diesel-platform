@@ -4,11 +4,11 @@ from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
 
 from flask import Flask, jsonify, request, send_from_directory
-from flask_login import LoginManager
+from flask_login import LoginManager, current_user
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
-from werkzeug.security import generate_password_hash
+from werkzeug.security import generate_password_hash, check_password_hash
 
 
 db = SQLAlchemy()
@@ -148,6 +148,15 @@ def create_app(test_config=None):
     def load_user(user_id):
         return db.session.get(User, int(user_id))
 
+    @app.after_request
+    def prevent_authenticated_page_caching(response):
+        # Prevent browser Back/history from redisplaying protected content after logout.
+        if current_user.is_authenticated and not request.path.startswith('/static/'):
+            response.headers['Cache-Control']='no-store, no-cache, must-revalidate, max-age=0, private'
+            response.headers['Pragma']='no-cache'
+            response.headers['Expires']='0'
+        return response
+
     from .routes import bp
 
     app.register_blueprint(bp)
@@ -173,7 +182,14 @@ def create_app(test_config=None):
         if email and password and User.query.filter_by(email=email).first():
             admin_user=User.query.filter_by(email=email).first()
             User.query.filter(User.role=="platform_admin",User.id!=admin_user.id).update({"role":"customer_admin"},synchronize_session=False)
-            admin_user.role="platform_admin";admin_user.active=True;admin_user.email_verified=True;admin_user.email_verified_at=admin_user.email_verified_at or datetime.now(timezone.utc);admin_user.verification_nonce=None;admin_user.customer.active=True;db.session.commit()
+            admin_user.role="platform_admin";admin_user.active=True;admin_user.email_verified=True;admin_user.email_verified_at=admin_user.email_verified_at or datetime.now(timezone.utc);admin_user.verification_nonce=None;admin_user.customer.active=True
+            # Keep the existing platform administrator aligned with the current Render secret.
+            # Previously this branch promoted/activated the user but left the old password hash unchanged.
+            if not admin_user.password_hash or not check_password_hash(admin_user.password_hash,password):
+                admin_user.password_hash=generate_password_hash(password)
+                if hasattr(admin_user,"password_changed_at"):
+                    admin_user.password_changed_at=datetime.now(timezone.utc)
+            db.session.commit()
         elif email and password:
             customer = Customer(
                 name="AssetTrack 360 Administration",

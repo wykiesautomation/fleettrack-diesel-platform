@@ -536,6 +536,8 @@ def login():
         if valid and not u.email_verified:
             flash('Your email address has not been verified. Request a new verification email below.','error');return render_template('auth.html',mode='login',pending_email=email)
         if valid:
+            # Remove stale onboarding/session values before establishing a fresh identity.
+            session.clear()
             login_user(u)
             return redirect(url_for('admin.dashboard') if u.role=='platform_admin' else url_for('main.dashboard'))
         flash('Invalid login.','error')
@@ -543,7 +545,17 @@ def login():
 
 @bp.get('/logout')
 @login_required
-def logout():logout_user();return redirect(url_for('main.login'))
+def logout():
+    # Clear both Flask-Login identity and all application session state so a
+    # completed logout can never reuse stale onboarding/authentication data.
+    logout_user()
+    session.clear()
+    response=redirect(url_for('main.login'))
+    response.delete_cookie(current_app.config.get('SESSION_COOKIE_NAME','session'),path='/')
+    response.headers['Cache-Control']='no-store, no-cache, must-revalidate, max-age=0'
+    response.headers['Pragma']='no-cache'
+    response.headers['Expires']='0'
+    return response
 
 @bp.get('/assets')
 @login_required
