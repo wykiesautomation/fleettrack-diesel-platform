@@ -946,14 +946,36 @@ def tracking_hmi_context(asset,device,profile,location_count=0,motion_count=0):
     features={'gps':has_gps,'speed':has_gps,'maximum_speed':has_gps,'route_history':has_gps and location_count>0,'geofence':has_gps,'unexpected_movement':has_gps,'impact':has_impact,'tilt':has_tilt,'harsh_driving':has_motion and context=='VEHICLE','driving_score':has_motion and context=='VEHICLE' and motion_count>=5 and location_count>=10,'ignition':has_ignition}
     return {'context':context,'labels':labels,'features':features,'gps_source_uid':device.device_uid if device else None,'profile_name':(profile or {}).get('display_name','Profile not reported')}
 
+def gps_tracking_devices(customer_id):
+    """Return tenant devices that can truthfully supply location data."""
+    rows=[];now=utcnow()
+    devices=Device.query.filter_by(customer_id=customer_id,active=True).filter(Device.asset_id.isnot(None)).order_by(Device.device_uid,Device.id).all()
+    for device in devices:
+        asset=db.session.get(Asset,device.asset_id)
+        if not asset or asset.customer_id!=customer_id:continue
+        profile=profile_for_device(device) or {}
+        caps={str(x).upper() for x in (device.capabilities or [])}
+        keys={str(x.get('key') or '').lower() for x in profile.get('channels',[])}
+        types={str(x.get('signal_type') or '').upper() for x in profile.get('channels',[])}
+        mobile=str(device.device_type or '').upper() in {'MOBILE_WEB_TRACKER','ANDROID_MOBILE_TRACKER','MOBILE_TRACKER','IOS_MOBILE_TRACKER'}
+        has_location=bool(mobile or {'GPS','GNSS'} & caps or {'gps_fix','gps_location','latitude','longitude'} & keys or 'LOCATION' in types)
+        if not has_location:continue
+        age=int(max(0,(now-aware(device.last_seen)).total_seconds())//60) if device.last_seen else None
+        state='NEVER SEEN' if age is None else 'ONLINE' if age<=5 else 'DELAYED' if age<=15 else 'STALE' if age<=30 else 'OFFLINE'
+        rows.append({'device':device,'asset':asset,'profile':profile,'age_minutes':age,'state':state})
+    return sorted(rows,key=lambda x:(x['asset'].name.lower(),x['device'].device_uid.lower()))
+
 @bp.get('/fleet-tracking')
 @login_required
 def fleet_tracking():
-    asset=Asset.query.filter_by(customer_id=tenant_id(),asset_type='TRACKER').order_by(Asset.name,Asset.id).first()
-    if not asset:
-        flash('Create or assign a tracking asset before opening Fleet Tracking.','error')
+    trackers=gps_tracking_devices(tenant_id())
+    requested=request.args.get('device_id',type=int)
+    selected=next((x for x in trackers if x['device'].id==requested),None) if requested else None
+    if selected is None and trackers:selected=trackers[0]
+    if not selected:
+        flash('Connect or assign a GPS-capable device before opening Fleet Tracking.','error')
         return redirect(url_for('main.onboarding'))
-    return redirect(url_for('main.safety_twin',asset_id=asset.id))
+    return redirect(url_for('main.safety_twin',asset_id=selected['asset'].id,device_id=selected['device'].id))
 
 @bp.get('/asset/<int:asset_id>/tracking')
 @login_required
@@ -2845,7 +2867,11 @@ def safety_twin(asset_id):
     now=utcnow();rows=Location.query.filter_by(customer_id=tenant_id(),asset_id=asset.id).order_by(desc(Location.sampled_at)).limit(250).all();rows=list(reversed(rows))
     twin=analyse_safety_twin_points(rows)
     latest=rows[-1] if rows else None
-    device=Device.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,active=True).order_by(desc(Device.last_seen)).first()
+    requested_device_id=request.args.get('device_id',type=int)
+    device_query=Device.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,active=True)
+    device=device_query.filter_by(id=requested_device_id).first() if requested_device_id else device_query.order_by(desc(Device.last_seen)).first()
+    gps_trackers=gps_tracking_devices(tenant_id())
+    selected_tracker_device_id=device.id if device else None
     safety=(asset.metadata_json or {}).get('tracking_safety',{}) or {};zones=safety.get('zones',[]) if isinstance(safety.get('zones',[]),list) else []
     caps=set(str(x).upper() for x in (device.capabilities or [])) if device else set()
     battery_sig=SignalDefinition.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,key='battery_percent').first()
@@ -2874,7 +2900,7 @@ def safety_twin(asset_id):
       {'title':'Unexpected Movement','detail':'Uses validated location and motion evidence when enabled.','status':'ENABLED' if safety.get('unexpected_movement') else 'AVAILABLE' if motion_sensor else 'MOTION SETUP REQUIRED','ready':bool(safety.get('unexpected_movement') or motion_sensor),'setup_url':url_for('motion_safety.setup',asset_id=asset.id)},
     ]
     evidence=[{'label':'Connectivity gate','detail':('Live telemetry received within 5 minutes' if connectivity=='ONLINE' else f"No live telemetry for {last_age} minute(s)" if last_age is not None else 'Device has never reported'),'state':connectivity},{'label':'GPS observations','detail':f"{twin['raw_count']} raw points received",'state':'MEASURED'},{'label':'Quality gate','detail':f"{twin['rejected_count']} point(s) rejected",'state':'VALIDATED'},{'label':'Stationary envelope','detail':f"{twin['drift_count']} point(s) remained inside uncertainty",'state':'PROVED'},{'label':'Movement confirmation','detail':f"{twin['movement_count']} confirmed movement point(s)",'state':'PROVED'}]
-    return render_template('safety_twin.html',asset=asset,device=device,twin=twin,latest=latest,zones=zones,safety=safety,caps=caps,battery=battery,last_age=last_age,battery_age=battery_age,battery_stale=battery_stale,connectivity=connectivity,state_label=state_label,evidence=evidence,safety_cards=safety_cards,now=now)
+    return render_template('safety_twin.html',asset=asset,device=device,twin=twin,latest=latest,zones=zones,safety=safety,caps=caps,battery=battery,last_age=last_age,battery_age=battery_age,battery_stale=battery_stale,connectivity=connectivity,state_label=state_label,evidence=evidence,safety_cards=safety_cards,gps_trackers=gps_trackers,selected_tracker_device_id=selected_tracker_device_id,now=now)
 
 # Evidence Report & Client Export Centre - Batch 3
 def _evidence_role_allowed():
