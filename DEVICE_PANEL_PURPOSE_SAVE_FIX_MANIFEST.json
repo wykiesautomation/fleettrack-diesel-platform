@@ -1,0 +1,21 @@
+{
+  "release": "AssetTrack 360 Device Panel Purpose Save Fix",
+  "created_utc": "2026-08-31T17:40:24.846340+00:00",
+  "files": [
+    {
+      "path": "app/routes.py",
+      "size": 325763,
+      "sha256": "bb76796b823b5e2794b19f91ec0311d542b8b37e7dcd4f4d015b0ab80f3f7835"
+    },
+    {
+      "path": "tests/test_device_panel_purpose_save_fix.py",
+      "size": 772,
+      "sha256": "ed047179dbe5570bc656f8c78809fa0f073f212eac3041e3656c6c7adaffecdf"
+    },
+    {
+      "path": "BUILD_DEVICE_PANEL_PURPOSE_SAVE_FIX.md",
+      "size": 407,
+      "sha256": "02253ecf364234dd18bfeeab45276855b13906b859c3570d8ced53e9c8bd80f8"
+    }
+  ]
+}

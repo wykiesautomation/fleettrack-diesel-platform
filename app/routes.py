@@ -487,14 +487,7 @@ def register():
         if len(company)<2 or len(name)<2 or '@' not in email or len(password)<10:
             _record_attempt(email or 'empty','REGISTER',False);db.session.commit();flash('Complete all fields. Password must be at least 10 characters.','error')
         elif User.query.filter_by(email=email).first():
-            existing=User.query.filter_by(email=email).first()
-            if not existing.email_verified:
-                sent=_send_user_verification(existing)
-                _record_attempt(email,'REGISTER',sent);db.session.commit()
-                current_app.logger.info('Registration reused unverified account; verification delivery=%s user_id=%s', 'accepted' if sent else 'failed', existing.id)
-                flash('Verification email sent. Check Inbox, Spam and Junk.' if sent else 'Verification email could not be sent. Please use Resend Verification shortly.','ok' if sent else 'error')
-                return redirect(url_for('main.login'))
-            _record_attempt(email,'REGISTER',True);db.session.commit();flash(generic,'ok');return redirect(url_for('main.login'))
+            _record_attempt(email,'REGISTER',False);db.session.commit();flash(generic,'ok');return redirect(url_for('main.login'))
         else:
             base=slugify(company) or 'customer';slug=base;n=1
             while Customer.query.filter_by(slug=slug).first():n+=1;slug=f'{base}-{n}'
@@ -532,14 +525,8 @@ def resend_verification():
     email=request.form.get('email','').strip().lower();generic='If an unverified account exists, a new verification email will be sent.'
     if _attempt_count(email,'RESEND',60,True)>=5 or _attempt_count(email,'RESEND',60,False)>=3:
         flash('Too many resend requests. Please wait before trying again.','error');return redirect(url_for('main.login'))
-    user=User.query.filter_by(email=email).first()
-    if user and not user.email_verified:
-        sent=_send_user_verification(user)
-        _record_attempt(email,'RESEND',sent);db.session.commit()
-        current_app.logger.info('Verification resend delivery=%s user_id=%s', 'accepted' if sent else 'failed', user.id)
-        flash('Verification email sent. Check Inbox, Spam and Junk.' if sent else 'Verification email could not be sent. Please try again shortly.','ok' if sent else 'error')
-        return redirect(url_for('main.login'))
-    _record_attempt(email or 'empty','RESEND',True);db.session.commit()
+    user=User.query.filter_by(email=email).first();_record_attempt(email or 'empty','RESEND',bool(user and not user.email_verified));db.session.commit()
+    if user and not user.email_verified:_send_user_verification(user)
     flash(generic,'ok');return redirect(url_for('main.login'))
 
 @bp.route('/login',methods=['GET','POST'])
@@ -1523,7 +1510,7 @@ def io_configuration(asset_id):
             if not row:row=DeviceChannelAssignment(customer_id=tenant_id(),device_id=device.id,channel_key=key,direction=direction);db.session.add(row)
             return row
         for c in analog:
-            key=c['key'];enabled=request.form.get(key+'_enabled')=='on';purpose=request.form.get(key+'_measurement','CUSTOM_ANALOG').upper()
+            key=c['key'];enabled=request.form.get(key+'_enabled')=='on';purpose=request.form.get(key+'_purpose','CUSTOM_ANALOG').upper()
             if purpose not in analog_lib:raise ValueError(key+': unsupported measurement type')
             stype,widget=analog_lib[purpose];sig=SignalDefinition.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,key=key).first();defaults=c.get('defaults',{})
             if not sig:sig=SignalDefinition(customer_id=tenant_id(),asset_id=asset.id,key=key,label=c['label'],signal_type=stype,source_type=c['source_type'],unit=c.get('unit',''),widget=widget);db.session.add(sig);db.session.flush()
