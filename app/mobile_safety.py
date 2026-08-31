@@ -127,18 +127,33 @@ def acknowledge(event_id):
 
 
 def reevaluate_pending_safety_events(limit=50):
- due=Live360SafetyEvent.query.filter(Live360SafetyEvent.status=='CONFIRMATION_PENDING',Live360SafetyEvent.event_type.in_(['POSSIBLE_ACCIDENT','ABNORMAL_TILT'])).order_by(Live360SafetyEvent.sampled_at).limit(limit).all();processed=0
+ """Finalise due crash/rollover candidates once the cancellation window expires."""
+ due=(Live360SafetyEvent.query
+      .filter(Live360SafetyEvent.status=='CONFIRMATION_PENDING',Live360SafetyEvent.event_type.in_(['POSSIBLE_ACCIDENT','ABNORMAL_TILT']))
+      .order_by(Live360SafetyEvent.sampled_at,Live360SafetyEvent.id).limit(max(1,min(int(limit or 50),500))).all())
+ processed=0
  for event in due:
   detail=dict(event.detail_json or {});deadline=detail.get('cancel_deadline')
   if deadline:
    try:
-    if now()<datetime.fromisoformat(deadline):continue
-   except ValueError:pass
-  device=db.session.get(Device,event.device_id)
-  if not device or not device.active:event.status='INSUFFICIENT_EVIDENCE';processed+=1;continue
-  original=event.event_type;confirmation(event,detail,device)
-  if event.status=='CONFIRMATION_PENDING':
-   locations,samples=evidence(event);event.status='UNCONFIRMED' if locations or samples else 'INSUFFICIENT_EVIDENCE';detail=dict(event.detail_json or {});detail['evaluated_at']=now().isoformat();detail['evaluation_version']='motion-safety-3.1';event.detail_json=detail
-  if event.status=='CONFIRMED':db.session.add(SecurityAuditEvent(customer_id=event.customer_id,asset_id=event.asset_id,device_id=event.device_id,event_type='SAFETY_CANDIDATE_FINALISED',actor_type='SYSTEM',safe_summary=f'{original} finalised as {event.event_type}'))
+    parsed=datetime.fromisoformat(str(deadline).replace('Z','+00:00'))
+    if not parsed.tzinfo:parsed=parsed.replace(tzinfo=timezone.utc)
+    if now()<parsed:continue
+   except (TypeError,ValueError):detail['deadline_parse_error']=True
+  device=db.session.get(Device,event.device_id);original=event.event_type
+  if not device or not device.active:
+   event.status='INSUFFICIENT_EVIDENCE'
+  else:
+   confirmation(event,detail,device)
+   if event.status=='CONFIRMATION_PENDING':
+    locations,samples=evidence(event)
+    event.status='UNCONFIRMED' if locations or samples else 'INSUFFICIENT_EVIDENCE'
+  detail=dict(event.detail_json or detail);detail['evaluated_at']=now().isoformat();detail['evaluation_version']='motion-safety-3.2';detail['final_status']=event.status;event.detail_json=detail
+  if event.status=='CONFIRMED':
+   db.session.add(SecurityAuditEvent(customer_id=event.customer_id,asset_id=event.asset_id,device_id=event.device_id,event_type='SAFETY_CANDIDATE_FINALISED',actor_type='SYSTEM',safe_summary=f'{original} finalised as {event.event_type}'))
+  else:
+   db.session.add(SecurityAuditEvent(customer_id=event.customer_id,asset_id=event.asset_id,device_id=event.device_id,event_type='SAFETY_CANDIDATE_REVIEWED',actor_type='SYSTEM',safe_summary=f'{original} finalised as {event.status}'))
   processed+=1
- db.session.commit();return processed
+ if processed:db.session.commit()
+ return processed
+

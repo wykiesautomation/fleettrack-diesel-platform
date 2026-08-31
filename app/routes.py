@@ -907,21 +907,46 @@ def _distance_km(a,b):
     return 2*6371.0088*math.asin(min(1,math.sqrt(value)))
 
 def analyse_tracking_points(rows):
-    """Build route-safe historical segments from the shared strict validator."""
-    strict=analyse_safety_twin_points(rows);accepted_by_time={x['timestamp']:x for x in strict['movement']};rejected=[];rejection_counts={};route_segments=[];segments=route_segments;current=[];previous=None
-    for row in rows:
-        stamp=aware(row.sampled_at).isoformat();point=accepted_by_time.get(stamp)
-        if point:current.append(point);previous=point
-        else:
-            reason='POOR_ACCURACY' if row.accuracy_m is not None and row.accuracy_m>50 else 'STATIONARY_DRIFT';rejected.append({'timestamp':stamp,'latitude':row.latitude,'longitude':row.longitude,'accuracy':row.accuracy_m,'speed':row.speed_kmh,'reason':reason});rejection_counts[reason]=rejection_counts.get(reason,0)+1
-            if current:segments.append(current);current=[]
-            previous=None
+    """Return a deterministic, segmented historical route from the strict live validator.
+
+    Every rejected observation breaks route continuity. Distance is therefore never
+    drawn or accumulated across poor GPS, stationary drift, impossible gaps or
+    out-of-order observations.
+    """
+    ordered=sorted(rows,key=lambda row:(aware(row.sampled_at),getattr(row,'id',0) or 0))
+    rows=ordered
+    strict=analyse_safety_twin_points(rows)
+    movement_by_time={}
+    for point in strict.get('movement',[]):
+        movement_by_time.setdefault(point['timestamp'],[]).append(point)
+    rejected=[];rejection_counts={};route_segments=[];segments=route_segments;current=[];previous=None
+    for row in ordered:
+        stamp=aware(row.sampled_at).isoformat();matches=movement_by_time.get(stamp) or []
+        point=matches.pop(0) if matches else None
+        if point:
+            current.append(point);previous=point
+            continue
+        accuracy=float(row.accuracy_m) if row.accuracy_m is not None else None
+        reason='POOR_ACCURACY' if accuracy is not None and accuracy>50 else 'STATIONARY_DRIFT'
+        rejected.append({'timestamp':stamp,'latitude':row.latitude,'longitude':row.longitude,'accuracy':row.accuracy_m,'speed':row.speed_kmh,'reason':reason})
+        rejection_counts[reason]=rejection_counts.get(reason,0)+1
+        if current:segments.append(current);current=[]
+        previous=None
     if current:route_segments.append(current)
-    distance=0.0
-    for segment in route_segments:
+
+    distance=0.0;journeys=[]
+    for number,segment in enumerate(route_segments,1):
         total=sum(_distance_dict(x,y) for x,y in zip(segment,segment[1:]));distance+=total
+        if segment:
+            journeys.append({'number':number,'started_at':segment[0]['timestamp'],'ended_at':segment[-1]['timestamp'],'point_count':len(segment),'distance_km':round(total,3),'maximum_speed':round(max(float(x.get('speed') or 0) for x in segment),1)})
+
+    # Strict drift observations are retained as diagnostic stop evidence, never route distance.
+    stops=[]
+    for drift in strict.get('drift',[]):
+        stops.append({'timestamp':drift.get('timestamp'),'latitude':drift.get('latitude'),'longitude':drift.get('longitude'),'accuracy':drift.get('accuracy'),'reason':'STATIONARY_DRIFT'})
     accepted=[point for segment in route_segments for point in segment]
-    return {'points':accepted,'last':accepted[-1] if accepted else (strict['drift'][-1] if strict['drift'] else None),'accepted':accepted,'rejected':rejected,'segments':route_segments,'journeys':[],'stops':[],'total_km':round(distance,2),'distance_km':round(distance,2),'max_speed':strict['maximum_speed'],'maximum_speed':strict['maximum_speed'],'moving_minutes':strict['movement_minutes'],'movement_minutes':strict['movement_minutes'],'stopped_minutes':strict['stationary_minutes'],'stationary_minutes':strict['stationary_minutes'],'rejection_counts':rejection_counts,'confidence':strict['confidence'],'state':strict['state'],'raw_count':strict['raw_count'],'movement_count':len(accepted),'drift_count':strict['drift_count'],'rejected_count':len(rejected),'low_quality_count':strict.get('low_quality_count',0),'raw_speed':strict['raw'][-1]['speed'] if strict['raw'] else None}
+    last=accepted[-1] if accepted else (strict.get('drift') or [None])[-1]
+    return {'points':accepted,'last':last,'accepted':accepted,'rejected':rejected,'segments':route_segments,'journeys':journeys,'stops':stops,'total_km':round(distance,2),'distance_km':round(distance,2),'max_speed':strict['maximum_speed'],'maximum_speed':strict['maximum_speed'],'moving_minutes':strict['movement_minutes'],'movement_minutes':strict['movement_minutes'],'stopped_minutes':strict['stationary_minutes'],'stationary_minutes':strict['stationary_minutes'],'rejection_counts':rejection_counts,'confidence':strict['confidence'],'state':strict['state'],'raw_count':strict['raw_count'],'movement_count':len(accepted),'drift_count':strict['drift_count'],'rejected_count':len(rejected),'low_quality_count':strict.get('low_quality_count',0),'raw_speed':strict['raw'][-1]['speed'] if strict['raw'] else None}
 
 def _distance_dict(a,b):
     import math
