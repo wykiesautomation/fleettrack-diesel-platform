@@ -97,14 +97,7 @@ def io_studio(device_id):
         if row.enabled:
             sig=SignalDefinition.query.filter_by(customer_id=dev.customer_id,asset_id=asset.id,key=key).first()
             if not sig:sig=SignalDefinition(customer_id=dev.customer_id,asset_id=asset.id,key=key,label=label,signal_type=spec['signal_type'],source_type=spec['source_type'],unit=spec.get('unit',''),widget=spec.get('widget','numeric'));db.session.add(sig);db.session.flush()
-            sig.label=label;sig.enabled=True
-            if purpose=='TANK_LEVEL':
-                if not (spec.get('direction')=='INPUT' and spec.get('calibratable')):
-                    db.session.rollback();flash('Tank Level requires a verified calibratable analogue input.','error');return redirect(request.url)
-                sig.signal_type='LEVEL';sig.source_type=spec['source_type'];sig.unit='%';sig.widget='tank';sig.raw_min=0.0;sig.raw_max=100.0;sig.eng_min=0.0;sig.eng_max=100.0
-            cfg=dict(sig.config_json or {});cfg.update({'device_id':dev.id,'purpose':purpose,'physical_pin':spec.get('pin')})
-            if purpose=='TANK_LEVEL':cfg.update({'application':'TANK_LEVEL','calibration_mode':'LINEAR','dashboard_visual':'EASY_TANK','tank_orientation':'VERTICAL_CYLINDER','normalized_firmware_input':True})
-            sig.config_json=cfg;row.signal_id=sig.id
+            sig.label=label;sig.enabled=True;cfg=dict(sig.config_json or {});cfg.update({'device_id':dev.id,'purpose':purpose,'physical_pin':spec.get('pin')});sig.config_json=cfg;row.signal_id=sig.id
         else:row.signal_id=None
         db.session.commit();flash(f'{label} saved.','ok');return redirect(request.url)
     rows={x.channel_key:x for x in DeviceChannelAssignment.query.filter_by(device_id=dev.id).all()};profile_channels=list(profile.get('channels',[]));physical=[x for x in profile_channels if x.get('direction') in ('INPUT','OUTPUT') and x.get('pin')];internal=[x for x in profile_channels if x.get('direction') in ('HEALTH','LOCATION')];reserved=list(profile.get('reserved_pins',[]));assigned=[x for x in rows.values() if x.enabled];online=bool(dev.last_seen and now()-dev.last_seen.replace(tzinfo=dev.last_seen.tzinfo or timezone.utc)<=timedelta(minutes=30));return render_template('io_studio.html',device=dev,profile=profile,assets=compatible_assets,all_devices=all_devices,assignments=rows,is_mobile=profile['code']=='AT360_MOBILE_TRACKER',physical_points=physical,internal_points=internal,reserved_points=reserved,assigned_points=assigned,device_online=online,preselected_asset_id=preselected_asset_id)

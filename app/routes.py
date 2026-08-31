@@ -487,7 +487,14 @@ def register():
         if len(company)<2 or len(name)<2 or '@' not in email or len(password)<10:
             _record_attempt(email or 'empty','REGISTER',False);db.session.commit();flash('Complete all fields. Password must be at least 10 characters.','error')
         elif User.query.filter_by(email=email).first():
-            _record_attempt(email,'REGISTER',False);db.session.commit();flash(generic,'ok');return redirect(url_for('main.login'))
+            existing=User.query.filter_by(email=email).first()
+            if not existing.email_verified:
+                sent=_send_user_verification(existing)
+                _record_attempt(email,'REGISTER',sent);db.session.commit()
+                current_app.logger.info('Registration reused unverified account; verification delivery=%s user_id=%s', 'accepted' if sent else 'failed', existing.id)
+                flash('Verification email sent. Check Inbox, Spam and Junk.' if sent else 'Verification email could not be sent. Please use Resend Verification shortly.','ok' if sent else 'error')
+                return redirect(url_for('main.login'))
+            _record_attempt(email,'REGISTER',True);db.session.commit();flash(generic,'ok');return redirect(url_for('main.login'))
         else:
             base=slugify(company) or 'customer';slug=base;n=1
             while Customer.query.filter_by(slug=slug).first():n+=1;slug=f'{base}-{n}'
@@ -525,8 +532,14 @@ def resend_verification():
     email=request.form.get('email','').strip().lower();generic='If an unverified account exists, a new verification email will be sent.'
     if _attempt_count(email,'RESEND',60,True)>=5 or _attempt_count(email,'RESEND',60,False)>=3:
         flash('Too many resend requests. Please wait before trying again.','error');return redirect(url_for('main.login'))
-    user=User.query.filter_by(email=email).first();_record_attempt(email or 'empty','RESEND',bool(user and not user.email_verified));db.session.commit()
-    if user and not user.email_verified:_send_user_verification(user)
+    user=User.query.filter_by(email=email).first()
+    if user and not user.email_verified:
+        sent=_send_user_verification(user)
+        _record_attempt(email,'RESEND',sent);db.session.commit()
+        current_app.logger.info('Verification resend delivery=%s user_id=%s', 'accepted' if sent else 'failed', user.id)
+        flash('Verification email sent. Check Inbox, Spam and Junk.' if sent else 'Verification email could not be sent. Please try again shortly.','ok' if sent else 'error')
+        return redirect(url_for('main.login'))
+    _record_attempt(email or 'empty','RESEND',True);db.session.commit()
     flash(generic,'ok');return redirect(url_for('main.login'))
 
 @bp.route('/login',methods=['GET','POST'])
@@ -1093,11 +1106,9 @@ def asset_view(asset_id):
     mobile_types={'MOBILE_WEB_TRACKER','ANDROID_MOBILE_TRACKER','MOBILE_TRACKER','IOS_MOBILE_TRACKER'}
     mobile_device=bool(active_device and str(active_device.device_type or '').upper() in mobile_types)
     mobile_standard_keys={'gps_location','speed_kmh','heading','gps_accuracy_m','battery_percent','charging_status','last_contact','sos_event'}
-    assigned_keys=set();assignment_by_key={}
+    assigned_keys=set()
     if active_device:
-        active_assignments=DeviceChannelAssignment.query.filter_by(device_id=active_device.id,asset_id=asset.id,enabled=True).all()
-        assigned_keys={str(row.channel_key or '').lower() for row in active_assignments}
-        assignment_by_key={str(row.channel_key or '').lower():row for row in active_assignments}
+        assigned_keys={str(row.channel_key or '').lower() for row in DeviceChannelAssignment.query.filter_by(device_id=active_device.id,asset_id=asset.id,enabled=True).all()}
     universal_signal_cards=[]
     for card in cards:
         sig=card['signal'];key=str(sig.key or '').lower();spec=profile_channels.get(key,{})
@@ -1106,8 +1117,7 @@ def asset_view(asset_id):
         output=direction=='OUTPUT' or str(sig.signal_type or '').upper() in {'OUTPUT','DIGITAL_OUTPUT'}
         assigned=key in assigned_keys or bool((sig.config_json or {}).get('device_id')) or not active_device
         if assigned and not diagnostic and not output and not (mobile_device and key in mobile_standard_keys):
-            assignment=assignment_by_key.get(key);cfg=dict(sig.config_json or {});purpose=str((assignment.purpose if assignment else None) or cfg.get('purpose') or cfg.get('application') or '').upper()
-            universal_signal_cards.append({**card,'direction':direction,'capability':spec.get('signal_type') or sig.signal_type,'purpose':purpose,'dashboard_visual':cfg.get('dashboard_visual','EASY_TANK'),'tank_orientation':cfg.get('tank_orientation','VERTICAL_CYLINDER'),'waiting':not bool(card.get('latest'))})
+            universal_signal_cards.append({**card,'direction':direction,'capability':spec.get('signal_type') or sig.signal_type,'waiting':not bool(card.get('latest'))})
     # Monitoring visuals must use a configured process signal, never the first arbitrary reading.
     # Raw *_volts channels remain available for diagnostics/calibration but are not valid
     # engineering-value sources for Temperature, Flow, Pressure, or Totalizer visuals.
