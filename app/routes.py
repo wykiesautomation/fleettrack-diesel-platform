@@ -2105,15 +2105,21 @@ def mobile_tracker_location_batch():
     data=request.get_json(silent=True) or {};points=data.get('points')
     if not isinstance(points,list) or not points:return jsonify(error='points_required'),400
     if len(points)>100:return jsonify(error='batch_too_large',maximum=100),413
+    # Android clients may send identity once at batch level or on every point.
+    # Both forms are authenticated by the same bearer token and must resolve to
+    # the exact registered device. This keeps older and current clients compatible.
+    batch_device_id=str(data.get('device_id') or '').strip().upper()
+    if batch_device_id and batch_device_id!=device.device_uid.upper():return jsonify(error='device_identity_mismatch'),403
     ensure_mobile_auto_profile(device);accepted=[];duplicates=[];rejected=[]
     for index,item in enumerate(points):
         if not isinstance(item,dict):rejected.append({'index':index,'error':'invalid_point'});continue
         sequence=str(item.get('sequence','')).strip()[:80]
-        if str(item.get('device_id','')).upper()!=device.device_uid.upper():rejected.append({'index':index,'sequence':sequence,'error':'device_identity_mismatch'});continue
+        point_device_id=str(item.get('device_id') or batch_device_id or device.device_uid).strip().upper()
+        if point_device_id!=device.device_uid.upper():rejected.append({'index':index,'sequence':sequence,'error':'device_identity_mismatch'});continue
         if not sequence:rejected.append({'index':index,'error':'sequence_required'});continue
         if Location.query.filter_by(asset_id=device.asset_id,sequence=sequence).first():duplicates.append(sequence);continue
         try:
-            lat=float(item['latitude']);lon=float(item['longitude']);acc=max(0,float(item.get('accuracy_m') or 0));speed=max(0,float(item.get('speed_kmh') or 0))
+            lat=float(item.get('latitude',item.get('lat')));lon=float(item.get('longitude',item.get('lon',item.get('lng'))));acc=max(0,float(item.get('accuracy_m',item.get('accuracy',0)) or 0));speed=max(0,float(item.get('speed_kmh',item.get('speed',0)) or 0))
             if not(-90<=lat<=90 and -180<=lon<=180) or speed>300:raise ValueError()
         except (KeyError,TypeError,ValueError):rejected.append({'index':index,'sequence':sequence,'error':'invalid_location_payload'});continue
         sampled=parse_time(item.get('timestamp'));speed=0.0 if speed<3 else speed
