@@ -8,6 +8,7 @@ from werkzeug.security import generate_password_hash
 from . import db
 from .models import *
 from .security_privacy import audit
+from .device_profiles import profile_for_device
 admin_bp=Blueprint('admin',__name__,url_prefix='/platform-admin')
 def utcnow():return datetime.now(timezone.utc)
 def aware(v):return v if not v or v.tzinfo else v.replace(tzinfo=timezone.utc)
@@ -112,6 +113,48 @@ def invoices():return render_template('platform_admin_invoices.html',rows=Paymen
 @owner_only
 def devices():
  n=utcnow();rows=[{'d':d,'online':bool(d.active and d.last_seen and n-aware(d.last_seen)<=timedelta(minutes=30))} for d in Device.query.order_by(desc(Device.last_seen)).all()];return render_template('platform_admin_devices.html',rows=rows,cname=cname)
+@admin_bp.post('/devices/<int:device_id>/repair-assignments')
+@owner_only
+def repair_device_assignments(device_id):
+ """Safely reconcile a linked device profile with existing tenant signals."""
+ device=Device.query.filter_by(id=device_id).first_or_404()
+ asset=device.asset
+ profile=profile_for_device(device)
+ if not device.active or not asset or asset.customer_id!=device.customer_id:
+  flash('Repair blocked: device must be active and linked to an asset in the same customer workspace.','error');return redirect(url_for('admin.devices'))
+ if not profile or not isinstance(profile,dict):
+  flash('Repair blocked: no verified device profile is available.','error');return redirect(url_for('admin.devices'))
+ linked=0;placeholders=0;preserved=0
+ try:
+  for spec in profile.get('channels',[]):
+   if not isinstance(spec,dict) or not spec.get('key'):continue
+   key=str(spec['key']);assignment=DeviceChannelAssignment.query.filter_by(device_id=device.id,channel_key=key).first()
+   if not assignment:
+    assignment=DeviceChannelAssignment(customer_id=device.customer_id,device_id=device.id,channel_key=key,direction=spec.get('direction','HEALTH'),purpose='UNUSED',customer_label=spec.get('label',key),enabled=False,config_json={})
+    db.session.add(assignment);placeholders+=1
+   elif assignment.customer_id!=device.customer_id:
+    raise ValueError(f'Tenant mismatch on assignment {key}')
+   signal=SignalDefinition.query.filter_by(customer_id=device.customer_id,asset_id=asset.id,key=key).first()
+   config=dict(assignment.config_json or {})
+   config.update({'profile_code':profile.get('code'),'physical_pin':spec.get('pin'),'pin_notes':spec.get('pin_notes'),'reconciled_by_platform_admin':current_user.id,'reconciled_at':utcnow().isoformat()})
+   assignment.direction=spec.get('direction','HEALTH');assignment.config_json=config
+   if signal:
+    assignment.asset_id=asset.id;assignment.signal_id=signal.id;assignment.customer_label=signal.label;assignment.enabled=True
+    if assignment.purpose in (None,'','UNUSED'):
+     assignment.purpose={'INPUT':'PROCESS_INPUT','OUTPUT':'OUTPUT_FEEDBACK','HEALTH':'DEVICE_HEALTH','LOCATION':'LOCATION'}.get(spec.get('direction'),'DEVICE_POINT')
+    signal.enabled=True
+    signal_config=dict(signal.config_json or {});signal_config.update({'device_id':device.id,'profile_code':profile.get('code'),'physical_pin':spec.get('pin')});signal.config_json=signal_config
+    linked+=1
+   else:
+    # Preserve an existing intentional assignment; never invent customer process signals.
+    if assignment.enabled and assignment.signal_id:preserved+=1
+  log('PLATFORM_DEVICE_ASSIGNMENTS_REPAIRED',device.customer_id,f'device={device.id}; asset={asset.id}; linked={linked}; placeholders={placeholders}; preserved={preserved}')
+  db.session.commit()
+ except Exception as exc:
+  db.session.rollback();flash('Assignment repair rolled back safely: '+type(exc).__name__,'error');return redirect(url_for('admin.devices'))
+ flash(f'Device {device.id} repaired safely: {linked} existing signal links restored, {placeholders} profile placeholders created, {preserved} existing assignments preserved.','ok')
+ return redirect(url_for('admin.devices'))
+
 @admin_bp.get('/support')
 @owner_only
 def support():return render_template('platform_admin_support.html',rows=DataDeletionRequest.query.order_by(desc(DataDeletionRequest.requested_at)).limit(500).all(),cname=cname)

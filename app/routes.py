@@ -1186,15 +1186,23 @@ def asset_view(asset_id):
         age=max(0,int((now-aware(selected_reading.sampled_at)).total_seconds()));age_label='Just now' if age<60 else f'{age//60} min ago' if age<3600 else f'{age//3600} h ago'
         operational_battery={'display':display,'state':state,'updated':age_label,'charging':('Yes' if float(charging_reading.value)>=0.5 else 'No') if charging_reading else (phone_battery.get('charging') if phone_battery else 'Not reported')}
     device_profile=profile_context;output_command=DeviceCommand.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,device_id=device.id).order_by(desc(DeviceCommand.created_at)).first() if device and device_profile.get('output_channels') else None
-    output_feedback_verified=False
+    output_feedback_verified=False;output_statuses={};local_arm_active=False;simulation_active=False
     if device and device_profile.get('output_channels'):
         feedback_ok=[]
+        arm_signal=SignalDefinition.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,key='local_arm_status').first()
+        arm_reading=latest_reading(arm_signal.id) if arm_signal else None
+        local_arm_active=bool(arm_reading and now-aware(arm_reading.sampled_at)<=timedelta(minutes=5) and float(arm_reading.value or 0)>=0.5 and str(arm_reading.quality or '').upper() not in ('SIMULATED','STALE','NO_FIX'))
+        simulation_signal=SignalDefinition.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,key='simulation_mode').first()
+        simulation_reading=latest_reading(simulation_signal.id) if simulation_signal else None
+        simulation_active=bool(simulation_reading and now-aware(simulation_reading.sampled_at)<=timedelta(minutes=5) and float(simulation_reading.value or 0)>=0.5)
         for output in device_profile.get('output_channels',[]):
             feedback_key=output.get('feedback_key') if isinstance(output,dict) else None
             signal=SignalDefinition.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,key=feedback_key).first() if feedback_key else None
             reading=latest_reading(signal.id) if signal else None
-            feedback_ok.append(bool(reading and now-aware(reading.sampled_at)<=timedelta(minutes=5) and str(reading.quality or '').upper() not in ('SIMULATED','STALE','NO_FIX')))
-        output_feedback_verified=bool(feedback_ok and all(feedback_ok))
+            fresh=bool(reading and now-aware(reading.sampled_at)<=timedelta(minutes=5) and str(reading.quality or '').upper() not in ('SIMULATED','STALE','NO_FIX'))
+            feedback_ok.append(fresh)
+            output_statuses[output.get('channel') or feedback_key]={'fresh':fresh,'state':('ON' if float(reading.value or 0)>=0.5 else 'OFF') if reading else 'WAITING','sampled_at':reading.sampled_at if reading else None}
+        output_feedback_verified=bool(feedback_ok and all(feedback_ok) and not simulation_active)
     tank_orientation='VERTICAL_CYLINDER'
     if asset.asset_type=='TANK':
         asset_meta=dict(asset.metadata_json or {})
@@ -1237,7 +1245,7 @@ def asset_view(asset_id):
         or 'SIM808' in firmware_identity
         or 'SIM808' in profile_code
     ))
-    return render_template('asset.html',asset=asset,signal_cards=cards,signal_lookup=lookup,chart_series=series,alarms=alarms,open_alarms=open_alarms,device=device,location=location,route_points=route,last_contact=last,generated_at=now,context=ctx,tank_stats=tank,tracking_stats=track,vibration_stats=vib,phone_battery=phone_battery,vehicle_summary=vehicle_summary,route_health=route_health,output_command=output_command,device_profile=device_profile,last_known_address=last_known_address,operational_battery=operational_battery,trend_policy=active_trend_policy,tank_orientation=tank_orientation,monitoring_visual=(asset.metadata_json or {}).get('monitoring_visual','EASY_TANK' if asset.asset_type=='TANK' else 'GENERAL_MONITORING'),visual_signal_candidates=visual_signal_candidates,primary_visual_signal=primary_visual_signal,primary_visual_card=primary_visual_card,primary_trend_selected=primary_trend_selected,primary_trend_points=primary_trend_points,has_location_capability=has_location_capability,valid_location=valid_location,output_feedback_verified=output_feedback_verified,asset_connectivity=asset_connectivity,sim808_profile=sim808_profile,universal_signal_cards=universal_signal_cards)
+    return render_template('asset.html',asset=asset,signal_cards=cards,signal_lookup=lookup,chart_series=series,alarms=alarms,open_alarms=open_alarms,device=device,location=location,route_points=route,last_contact=last,generated_at=now,context=ctx,tank_stats=tank,tracking_stats=track,vibration_stats=vib,phone_battery=phone_battery,vehicle_summary=vehicle_summary,route_health=route_health,output_command=output_command,device_profile=device_profile,last_known_address=last_known_address,operational_battery=operational_battery,trend_policy=active_trend_policy,tank_orientation=tank_orientation,monitoring_visual=(asset.metadata_json or {}).get('monitoring_visual','EASY_TANK' if asset.asset_type=='TANK' else 'GENERAL_MONITORING'),visual_signal_candidates=visual_signal_candidates,primary_visual_signal=primary_visual_signal,primary_visual_card=primary_visual_card,primary_trend_selected=primary_trend_selected,primary_trend_points=primary_trend_points,has_location_capability=has_location_capability,valid_location=valid_location,output_feedback_verified=output_feedback_verified,output_statuses=output_statuses,local_arm_active=local_arm_active,simulation_active=simulation_active,asset_connectivity=asset_connectivity,sim808_profile=sim808_profile,universal_signal_cards=universal_signal_cards)
 
 
 
@@ -1661,19 +1669,26 @@ def device(asset_id):
 def create_output_command(asset_id):
  asset=Asset.query.filter_by(id=asset_id,customer_id=tenant_id()).first_or_404();device=active_device_for(asset);profile=profile_for_device(device)
  if not device or not profile:abort(404)
- if not device.last_seen or utcnow()-aware(device.last_seen)>timedelta(minutes=30):
-  flash('Device is offline. Output commands are blocked until fresh firmware telemetry is received.','error');return redirect(url_for('main.asset_view',asset_id=asset.id))
- feedback_ready=[]
- for output in profile.get('output_channels',[]):
-  feedback_key=output.get('feedback_key') if isinstance(output,dict) else None
-  signal=SignalDefinition.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,key=feedback_key).first() if feedback_key else None;reading=latest_reading(signal.id) if signal else None
-  feedback_ready.append(bool(reading and utcnow()-aware(reading.sampled_at)<=timedelta(minutes=5) and str(reading.quality or '').upper() not in ('SIMULATED','STALE')))
- if not feedback_ready or not all(feedback_ready):
-  flash('Output state is not verified. Commands are blocked until fresh firmware feedback is received.','error');return redirect(url_for('main.asset_view',asset_id=asset.id))
- channel=request.form.get('channel','DO1').strip().upper();action=request.form.get('action','').strip().upper();allowed={x['channel']:x for x in profile.get('output_channels',[])}
- if channel not in allowed or action not in ('OUTPUT_ON','OUTPUT_OFF'):abort(400)
+ if not device.last_seen or utcnow()-aware(device.last_seen)>timedelta(minutes=5):
+  flash('Device is not ONLINE. Output commands are blocked until fresh firmware telemetry is received.','error');return redirect(url_for('main.asset_view',asset_id=asset.id))
+ channel=request.form.get('channel','DO1').strip().upper();action=request.form.get('action','').strip().upper();allowed={x['channel']:x for x in profile.get('output_channels',[]) if isinstance(x,dict) and x.get('channel')}
+ if channel not in allowed or action not in ('OUTPUT_ON','OUTPUT_OFF','OUTPUT_PULSE'):abort(400)
+ policy=allowed[channel];feedback_key=policy.get('feedback_key');signal=SignalDefinition.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,key=feedback_key).first() if feedback_key else None;reading=latest_reading(signal.id) if signal else None
+ feedback_fresh=bool(reading and utcnow()-aware(reading.sampled_at)<=timedelta(minutes=5) and str(reading.quality or '').upper() not in ('SIMULATED','STALE','NO_FIX'))
+ if not feedback_fresh:
+  flash(f'{channel} state is not verified. Commands are blocked until fresh physical firmware feedback is received.','error');return redirect(url_for('main.asset_view',asset_id=asset.id))
+ simulation_signal=SignalDefinition.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,key='simulation_mode').first();simulation_reading=latest_reading(simulation_signal.id) if simulation_signal else None
+ simulation_active=bool(simulation_reading and utcnow()-aware(simulation_reading.sampled_at)<=timedelta(minutes=5) and float(simulation_reading.value or 0)>=0.5)
+ if simulation_active:
+  flash('Simulation is active. Physical output commands are locked.','error');return redirect(url_for('main.asset_view',asset_id=asset.id))
+ if action in ('OUTPUT_ON','OUTPUT_PULSE') and policy.get('requires_local_arm'):
+  arm_signal=SignalDefinition.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,key='local_arm_status').first();arm_reading=latest_reading(arm_signal.id) if arm_signal else None
+  arm_active=bool(arm_reading and utcnow()-aware(arm_reading.sampled_at)<=timedelta(minutes=5) and float(arm_reading.value or 0)>=0.5 and str(arm_reading.quality or '').upper() not in ('SIMULATED','STALE','NO_FIX'))
+  if not arm_active:
+   flash(f'{channel} {action.replace("OUTPUT_","")} blocked: Local Arm is not active.','error');return redirect(url_for('main.asset_view',asset_id=asset.id))
  DeviceCommand.query.filter(DeviceCommand.device_id==device.id,DeviceCommand.channel==channel,DeviceCommand.state.in_(['PENDING','DELIVERED'])).update({'state':'SUPERSEDED'},synchronize_session=False)
- policy=allowed[channel];simulation_only=bool(policy.get('simulation_only',False));cmd=DeviceCommand(customer_id=tenant_id(),asset_id=asset.id,device_id=device.id,channel=channel,action=action,simulation_only=simulation_only,requested_by=current_user.id,request_token=secrets.token_hex(24),expires_at=utcnow()+timedelta(seconds=45));db.session.add(cmd);db.session.commit();flash(f'{channel} command queued. Device safety policy remains authoritative.','ok');return redirect(url_for('main.asset_view',asset_id=asset.id))
+ cmd=DeviceCommand(customer_id=tenant_id(),asset_id=asset.id,device_id=device.id,channel=channel,action=action,simulation_only=False,requested_by=current_user.id,request_token=secrets.token_hex(24),expires_at=utcnow()+timedelta(seconds=45));db.session.add(cmd);db.session.commit();flash(f'{channel} command queued. Device firmware and local protection remain authoritative.','ok');return redirect(url_for('main.asset_view',asset_id=asset.id))
+
 @bp.get('/api/v1/device/commands/next')
 def device_command_next():
  token=request.headers.get('Authorization','').removeprefix('Bearer ').strip();device=Device.query.filter_by(api_token=token,active=True).first()
