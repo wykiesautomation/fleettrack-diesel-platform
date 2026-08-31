@@ -1093,9 +1093,11 @@ def asset_view(asset_id):
     mobile_types={'MOBILE_WEB_TRACKER','ANDROID_MOBILE_TRACKER','MOBILE_TRACKER','IOS_MOBILE_TRACKER'}
     mobile_device=bool(active_device and str(active_device.device_type or '').upper() in mobile_types)
     mobile_standard_keys={'gps_location','speed_kmh','heading','gps_accuracy_m','battery_percent','charging_status','last_contact','sos_event'}
-    assigned_keys=set()
+    assigned_keys=set();assignment_by_key={}
     if active_device:
-        assigned_keys={str(row.channel_key or '').lower() for row in DeviceChannelAssignment.query.filter_by(device_id=active_device.id,asset_id=asset.id,enabled=True).all()}
+        active_assignments=DeviceChannelAssignment.query.filter_by(device_id=active_device.id,asset_id=asset.id,enabled=True).all()
+        assigned_keys={str(row.channel_key or '').lower() for row in active_assignments}
+        assignment_by_key={str(row.channel_key or '').lower():row for row in active_assignments}
     universal_signal_cards=[]
     for card in cards:
         sig=card['signal'];key=str(sig.key or '').lower();spec=profile_channels.get(key,{})
@@ -1104,7 +1106,8 @@ def asset_view(asset_id):
         output=direction=='OUTPUT' or str(sig.signal_type or '').upper() in {'OUTPUT','DIGITAL_OUTPUT'}
         assigned=key in assigned_keys or bool((sig.config_json or {}).get('device_id')) or not active_device
         if assigned and not diagnostic and not output and not (mobile_device and key in mobile_standard_keys):
-            universal_signal_cards.append({**card,'direction':direction,'capability':spec.get('signal_type') or sig.signal_type,'waiting':not bool(card.get('latest'))})
+            assignment=assignment_by_key.get(key);cfg=dict(sig.config_json or {});purpose=str((assignment.purpose if assignment else None) or cfg.get('purpose') or cfg.get('application') or '').upper()
+            universal_signal_cards.append({**card,'direction':direction,'capability':spec.get('signal_type') or sig.signal_type,'purpose':purpose,'dashboard_visual':cfg.get('dashboard_visual','EASY_TANK'),'tank_orientation':cfg.get('tank_orientation','VERTICAL_CYLINDER'),'waiting':not bool(card.get('latest'))})
     # Monitoring visuals must use a configured process signal, never the first arbitrary reading.
     # Raw *_volts channels remain available for diagnostics/calibration but are not valid
     # engineering-value sources for Temperature, Flow, Pressure, or Totalizer visuals.

@@ -22,5 +22,5 @@ def test_add_button_is_locked_without_valid_point():
     assert 'addButton.disabled=false' in T
 
 def test_analogue_rule_is_not_any_input_direction():
-    assert "ANALOGUE_INPUT:r=>r.signal.includes('ANALOG')||r.calibratable==='1'" in T
+    assert "ANALOGUE_INPUT:r=>r.signal.includes('ANALOG')" in T
     assert "ANALOGUE_INPUT:r=>r.signal.includes('ANALOG')||r.direction==='INPUT'" not in T

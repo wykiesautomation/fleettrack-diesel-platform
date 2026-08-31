@@ -103,7 +103,7 @@ def io_studio(device_id):
                     db.session.rollback();flash('Tank Level requires a verified calibratable analogue input.','error');return redirect(request.url)
                 sig.signal_type='LEVEL';sig.source_type=spec['source_type'];sig.unit='%';sig.widget='tank';sig.raw_min=0.0;sig.raw_max=100.0;sig.eng_min=0.0;sig.eng_max=100.0
             cfg=dict(sig.config_json or {});cfg.update({'device_id':dev.id,'purpose':purpose,'physical_pin':spec.get('pin')})
-            if purpose=='TANK_LEVEL':cfg.update({'application':'TANK_LEVEL','calibration_mode':'LINEAR','dashboard_visual':'EASY_TANK','normalized_firmware_input':True})
+            if purpose=='TANK_LEVEL':cfg.update({'application':'TANK_LEVEL','calibration_mode':'LINEAR','dashboard_visual':'EASY_TANK','tank_orientation':'VERTICAL_CYLINDER','normalized_firmware_input':True})
             sig.config_json=cfg;row.signal_id=sig.id
         else:row.signal_id=None
         db.session.commit();flash(f'{label} saved.','ok');return redirect(request.url)
