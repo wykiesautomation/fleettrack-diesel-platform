@@ -1195,13 +1195,21 @@ def asset_view(asset_id):
         simulation_signal=SignalDefinition.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,key='simulation_mode').first()
         simulation_reading=latest_reading(simulation_signal.id) if simulation_signal else None
         simulation_active=bool(simulation_reading and now-aware(simulation_reading.sampled_at)<=timedelta(minutes=5) and float(simulation_reading.value or 0)>=0.5)
+        simulated_output_seen=False
         for output in device_profile.get('output_channels',[]):
             feedback_key=output.get('feedback_key') if isinstance(output,dict) else None
-            signal=SignalDefinition.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,key=feedback_key).first() if feedback_key else None
-            reading=latest_reading(signal.id) if signal else None
-            fresh=bool(reading and now-aware(reading.sampled_at)<=timedelta(minutes=5) and str(reading.quality or '').upper() not in ('SIMULATED','STALE','NO_FIX'))
+            # Use the newest reading across every same-key signal on this asset. This is the
+            # same telemetry truth used by the lower I/O cards and avoids stale duplicate
+            # SignalDefinition rows overriding the newest Simulation selection.
+            matching_ids=[row.id for row in SignalDefinition.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,key=feedback_key).all()] if feedback_key else []
+            reading=Reading.query.filter(Reading.signal_id.in_(matching_ids)).order_by(desc(Reading.sampled_at),desc(Reading.id)).first() if matching_ids else None
+            quality=str(reading.quality or '').upper() if reading else ''
+            simulated=bool(reading and quality=='SIMULATED')
+            simulated_output_seen=simulated_output_seen or simulated
+            fresh=bool(reading and now-aware(reading.sampled_at)<=timedelta(minutes=5) and quality not in ('SIMULATED','STALE','NO_FIX'))
             feedback_ok.append(fresh)
-            output_statuses[output.get('channel') or feedback_key]={'fresh':fresh,'state':('ON' if float(reading.value or 0)>=0.5 else 'OFF') if reading else 'WAITING','sampled_at':reading.sampled_at if reading else None}
+            output_statuses[output.get('channel') or feedback_key]={'fresh':fresh,'simulated':simulated,'quality':quality or 'WAITING','state':('ON' if float(reading.value or 0)>=0.5 else 'OFF') if reading else 'WAITING','sampled_at':reading.sampled_at if reading else None}
+        simulation_active=bool(simulation_active or simulated_output_seen)
         output_feedback_verified=bool(feedback_ok and all(feedback_ok) and not simulation_active)
     tank_orientation='VERTICAL_CYLINDER'
     if asset.asset_type=='TANK':
