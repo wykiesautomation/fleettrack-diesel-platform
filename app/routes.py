@@ -1563,6 +1563,58 @@ def device_trending(asset_id):
     else:flash('Device trend settings saved.','ok')
     return redirect(url_for('main.universal_device_panel',asset_id=asset.id))
 
+@bp.route('/asset/<int:asset_id>/quick-calibration',methods=['GET','POST'])
+@login_required
+def quick_calibration(asset_id):
+    asset=Asset.query.filter_by(id=asset_id,customer_id=tenant_id()).first_or_404()
+    device=active_device_for(asset)
+    if not device:flash('Connect a device before calibration.','error');return redirect(url_for('main.asset_view',asset_id=asset.id))
+    if current_user.role not in ('customer_admin','platform_admin') and not has_advanced_access(asset.customer_id,device):abort(403)
+    analog_signals=[sig for sig in SignalDefinition.query.filter_by(customer_id=tenant_id(),asset_id=asset.id,enabled=True).order_by(SignalDefinition.label).all() if re.fullmatch(r'analog_[1-9][0-9]*',str(sig.key or ''))]
+    latest_by_id={sig.id:latest_reading(sig.id) for sig in analog_signals}
+    presets={
+      'TANK_LEVEL':{'label':'Tank Level','signal_type':'LEVEL','widget':'tank','unit':'%','eng_min':0.0,'eng_max':100.0,'visual':'EASY_TANK'},
+      'TEMPERATURE':{'label':'Temperature','signal_type':'TEMPERATURE','widget':'temperature','unit':'°C','eng_min':0.0,'eng_max':100.0,'visual':'TEMPERATURE'},
+      'PRESSURE':{'label':'Pressure','signal_type':'PRESSURE','widget':'pressure','unit':'bar','eng_min':0.0,'eng_max':10.0,'visual':'PRESSURE'},
+      'FLOW':{'label':'Flow','signal_type':'FLOW','widget':'flow','unit':'L/min','eng_min':0.0,'eng_max':100.0,'visual':'FLOW'},
+      'CUSTOM_ANALOG':{'label':'Custom Analogue','signal_type':'CUSTOM','widget':'numeric','unit':'%','eng_min':0.0,'eng_max':100.0,'visual':'GENERAL_MONITORING'},
+    }
+    sensor_types={
+      'NORMALIZED_PERCENT':{'label':'Board/Firmware 0-100%','raw_min':0.0,'raw_max':100.0,'note':'Recommended when firmware already normalises the protected input.'},
+      'CURRENT_4_20MA_CONDITIONED':{'label':'4-20 mA through verified conditioner','raw_min':4.0,'raw_max':20.0,'note':'Only use when the installed conditioner reports actual mA.'},
+      'VOLTAGE_0_10_CONDITIONED':{'label':'0-10 V through verified divider/conditioner','raw_min':0.0,'raw_max':10.0,'note':'Only use when the installed conditioner reports actual input volts.'},
+      'ADC_0_3V3':{'label':'Protected 0-3.3 V ADC','raw_min':0.0,'raw_max':3.3,'note':'Direct protected ADC range; never exceed the board input limit.'},
+      'CUSTOM_CONDITIONED':{'label':'Custom verified conditioned signal','raw_min':0.0,'raw_max':100.0,'note':'Installer must verify wiring, scaling and safe electrical limits.'},
+    }
+    if request.method=='POST':
+        signal_id=request.form.get('signal_id',type=int);sig=next((x for x in analog_signals if x.id==signal_id),None)
+        application=str(request.form.get('application') or '').upper();sensor_type=str(request.form.get('sensor_type') or '').upper()
+        if not sig or application not in presets or sensor_type not in sensor_types:flash('Select a valid assigned analogue channel, application and sensor signal.','error');return redirect(url_for('main.quick_calibration',asset_id=asset.id))
+        try:
+            raw_min=float(request.form.get('raw_min'));raw_max=float(request.form.get('raw_max'));eng_min=float(request.form.get('eng_min'));eng_max=float(request.form.get('eng_max'))
+        except (TypeError,ValueError):flash('Enter valid Zero and Span values. No changes were saved.','error');return redirect(url_for('main.quick_calibration',asset_id=asset.id,signal_id=sig.id))
+        if raw_max<=raw_min or eng_max==eng_min:flash('Span must exceed Zero and the engineering range may not be zero. No changes were saved.','error');return redirect(url_for('main.quick_calibration',asset_id=asset.id,signal_id=sig.id))
+        if sensor_type=='NORMALIZED_PERCENT' and (raw_min<0 or raw_max>100):flash('Normalised board data must remain inside 0-100%.','error');return redirect(url_for('main.quick_calibration',asset_id=asset.id,signal_id=sig.id))
+        if sensor_type=='ADC_0_3V3' and (raw_min<0 or raw_max>3.3):flash('Protected ADC calibration must remain inside 0-3.3 V.','error');return redirect(url_for('main.quick_calibration',asset_id=asset.id,signal_id=sig.id))
+        if sensor_type=='CURRENT_4_20MA_CONDITIONED' and (raw_min<0 or raw_max>24):flash('Conditioned current calibration must remain inside 0-24 mA.','error');return redirect(url_for('main.quick_calibration',asset_id=asset.id,signal_id=sig.id))
+        if sensor_type=='VOLTAGE_0_10_CONDITIONED' and (raw_min<0 or raw_max>12):flash('Conditioned voltage calibration must remain inside 0-12 V.','error');return redirect(url_for('main.quick_calibration',asset_id=asset.id,signal_id=sig.id))
+        preset=presets[application];unit=(request.form.get('unit') or preset['unit']).strip()[:20];label=(request.form.get('label') or preset['label']).strip()[:100]
+        previous={'saved_at':utcnow().isoformat(),'saved_by':current_user.id,'label':sig.label,'signal_type':sig.signal_type,'widget':sig.widget,'unit':sig.unit,'raw_min':sig.raw_min,'raw_max':sig.raw_max,'eng_min':sig.eng_min,'eng_max':sig.eng_max,'calibration_mode':sig.calibration_mode,'config_json':dict(sig.config_json or {})}
+        try:
+            cfg=dict(sig.config_json or {});history=list(cfg.get('calibration_history') or [])[-9:];history.append(previous)
+            cfg.update({'measurement_type':application,'sensor_input_type':sensor_type,'dashboard_visual':preset['visual'],'quick_calibration':{'status':'VERIFIED','method':'TWO_POINT','zero_raw':raw_min,'span_raw':raw_max,'engineering_min':eng_min,'engineering_max':eng_max,'verified_at':utcnow().isoformat(),'verified_by':current_user.id,'device_id':device.id,'device_uid':device.device_uid,'channel_key':sig.key},'calibration_history':history})
+            sig.label=label;sig.signal_type=preset['signal_type'];sig.widget=preset['widget'];sig.unit=unit;sig.raw_min=raw_min;sig.raw_max=raw_max;sig.eng_min=eng_min;sig.eng_max=eng_max;sig.calibration_mode='LINEAR';sig.config_json=cfg;sig.calibrated_at=utcnow();sig.calibrated_by=current_user.id
+            assignment=DeviceChannelAssignment.query.filter_by(device_id=device.id,asset_id=asset.id,signal_id=sig.id).first()
+            if assignment:
+                acfg=dict(assignment.config_json or {});acfg.update({'unit':unit,'eng_min':eng_min,'eng_max':eng_max,'visual':preset['visual'],'sensor_input_type':sensor_type,'calibration_status':'VERIFIED'});assignment.config_json=acfg;assignment.purpose=application;assignment.customer_label=label
+            meta=dict(asset.metadata_json or {});meta.update({'monitoring_signal_id':sig.id,'monitoring_signal_key':sig.key,'monitoring_visual':preset['visual']});asset.metadata_json=meta
+            audit(tenant_id(),'QUICK_CALIBRATION_DEPLOYED',asset.id,device.id,'USER',current_user.id,f'{sig.key}: {application}; {sensor_type}; {raw_min}-{raw_max} -> {eng_min}-{eng_max} {unit}')
+            db.session.commit();flash(f'{label} calibration verified and deployed. Previous calibration was preserved in history.','ok');return redirect(url_for('main.quick_calibration',asset_id=asset.id,signal_id=sig.id))
+        except Exception as exc:
+            db.session.rollback();current_app.logger.exception('Quick calibration rolled back asset=%s signal=%s',asset.id,sig.id);flash('Calibration was rolled back safely. Existing calibration remains active.','error');return redirect(url_for('main.quick_calibration',asset_id=asset.id,signal_id=sig.id))
+    selected_id=request.args.get('signal_id',type=int);selected=next((x for x in analog_signals if x.id==selected_id),analog_signals[0] if analog_signals else None)
+    return render_template('quick_calibration.html',asset=asset,device=device,signals=analog_signals,selected=selected,latest_by_id=latest_by_id,presets=presets,sensor_types=sensor_types)
+
 @bp.route('/asset/<int:asset_id>/signals',methods=['GET','POST'])
 @login_required
 def signals(asset_id):
