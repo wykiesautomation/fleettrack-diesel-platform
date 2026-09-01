@@ -1108,15 +1108,7 @@ def asset_view(asset_id):
         if assigned and not diagnostic and not output and not (mobile_device and key in mobile_standard_keys):
             assignment=assignment_by_key.get(key);cfg=dict(sig.config_json or {});purpose=str((assignment.purpose if assignment else None) or cfg.get('measurement_type') or cfg.get('purpose') or '').upper()
             visual=str((assignment.config_json or {}).get('visual') if assignment else cfg.get('dashboard_visual') or '').upper()
-            latest=card.get('latest');sample_age_minutes=None
-            if latest and latest.sampled_at:sample_age_minutes=max(0,int((now-aware(latest.sampled_at)).total_seconds()//60))
-            device_age_minutes=None
-            if active_device and active_device.last_seen:device_age_minutes=max(0,int((now-aware(active_device.last_seen)).total_seconds()//60))
-            effective_age=max([x for x in (sample_age_minutes,device_age_minutes) if x is not None],default=None)
-            freshness='WAITING' if not latest else 'OFFLINE' if effective_age is not None and effective_age>30 else 'STALE' if effective_age is not None and effective_age>15 else 'DELAYED' if effective_age is not None and effective_age>5 else 'LIVE'
-            reported_quality=str(latest.quality or 'REPORTED').upper() if latest else 'WAITING'
-            display_quality=reported_quality if freshness=='LIVE' else freshness
-            universal_signal_cards.append({**card,'direction':direction,'capability':sig.signal_type or spec.get('signal_type'),'purpose':purpose,'dashboard_visual':visual,'tank_orientation':(asset.metadata_json or {}).get('tank_visual',{}).get('orientation','VERTICAL_CYLINDER'),'waiting':not bool(latest),'freshness':freshness,'display_quality':display_quality,'effective_age_minutes':effective_age,'last_reported':bool(latest and freshness!='LIVE')})
+            universal_signal_cards.append({**card,'direction':direction,'capability':sig.signal_type or spec.get('signal_type'),'purpose':purpose,'dashboard_visual':visual,'tank_orientation':(asset.metadata_json or {}).get('tank_visual',{}).get('orientation','VERTICAL_CYLINDER'),'waiting':not bool(card.get('latest'))})
     # Monitoring visuals must use a configured process signal, never the first arbitrary reading.
     # Raw *_volts channels remain available for diagnostics/calibration but are not valid
     # engineering-value sources for Temperature, Flow, Pressure, or Totalizer visuals.

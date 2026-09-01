@@ -1,0 +1,28 @@
+{
+  "release": "AssetTrack 360 Global Button Link Contrast Fix",
+  "baseline": "current uploaded main.zip.txt",
+  "created_utc": "2026-09-01T05:39:59.612641+00:00",
+  "tests": "5 passed",
+  "files": [
+    {
+      "path": "app/templates/base.html",
+      "size": 4360,
+      "sha256": "d8f6be775fe3c2b34f924e7e7a6737f9b097387c48ad4413efd7afe5992f29b6"
+    },
+    {
+      "path": "app/static/accessibility_contrast.css",
+      "size": 3919,
+      "sha256": "19078ea6c243daf15f551c16f91d55ac2babe9abf3b3698bff445c89cb07c422"
+    },
+    {
+      "path": "tests/test_global_accessibility_contrast.py",
+      "size": 1148,
+      "sha256": "7f035c6205aeb1a5ed7e61be104898687e2f70fe9d6dca7123054577d3c9d4df"
+    },
+    {
+      "path": "BUILD_GLOBAL_BUTTON_LINK_CONTRAST_FIX.md",
+      "size": 576,
+      "sha256": "0ae0a8f3b5eacbce0bbbeff819b2498dd44b9ed81e09bd2bae9ad6a2705d5949"
+    }
+  ]
+}

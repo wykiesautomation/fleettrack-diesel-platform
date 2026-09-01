@@ -14,9 +14,9 @@ def test_sim808_physical_and_internal_points_are_separate():
 
 def test_dashboard_power_and_offline_controls_are_capability_aware():
     assert "'solar_v' in profile_keys" in A
-    assert 'DASHBOARD LIVE · DEVICE ' in A
+    assert 'PAGE LIVE ·' in A
     assert 'DEVICE OFFLINE' in A
-    assert 'Fresh feedback required for ON' in A
+    assert 'Commands are unavailable until fresh DO1 and DO2 firmware feedback is received.' in A
 
 def test_server_blocks_offline_output_commands():
     assert 'Output commands are blocked until fresh firmware telemetry is received.' in R
