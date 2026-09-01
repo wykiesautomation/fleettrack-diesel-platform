@@ -24,14 +24,6 @@
    {% endfor %}
   </div>
   <input type="hidden" name="profile_code" id="profile_code">
-  <div id="hardware-connection-choice" style="display:none;margin:14px 0;padding:14px;border:1px solid #28516a;border-radius:12px;background:#071b2a">
-    <b>PHYSICAL BOARD CONNECTION</b>
-    <div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:10px">
-      <label><input type="radio" name="hardware_connection_mode" value="NEW_BOARD" checked> New Board · generate a new claim code, UID and token</label>
-      <label><input type="radio" name="hardware_connection_mode" value="USE_EXISTING"> Use Existing Device · reuse an already connected compatible board</label>
-    </div>
-    <small style="display:block;color:#b8d4e0;margin-top:8px">New Board never opens or reuses an existing device.</small>
-  </div>
 
   <section id="capability-section" class="hidden">
    <div class="capability-panel">
@@ -53,7 +45,6 @@
 (function(){
  const cards=[...document.querySelectorAll('.type')];
  const profileCode=document.getElementById('profile_code');
- const hardwareChoice=document.getElementById('hardware-connection-choice');
  const capabilitySection=document.getElementById('capability-section');
  const capabilityList=document.getElementById('capability-list');
  const submit=document.getElementById('submit-button');

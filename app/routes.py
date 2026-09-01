@@ -1108,7 +1108,15 @@ def asset_view(asset_id):
         if assigned and not diagnostic and not output and not (mobile_device and key in mobile_standard_keys):
             assignment=assignment_by_key.get(key);cfg=dict(sig.config_json or {});purpose=str((assignment.purpose if assignment else None) or cfg.get('measurement_type') or cfg.get('purpose') or '').upper()
             visual=str((assignment.config_json or {}).get('visual') if assignment else cfg.get('dashboard_visual') or '').upper()
-            universal_signal_cards.append({**card,'direction':direction,'capability':sig.signal_type or spec.get('signal_type'),'purpose':purpose,'dashboard_visual':visual,'tank_orientation':(asset.metadata_json or {}).get('tank_visual',{}).get('orientation','VERTICAL_CYLINDER'),'waiting':not bool(card.get('latest'))})
+            latest=card.get('latest');sample_age_minutes=None
+            if latest and latest.sampled_at:sample_age_minutes=max(0,int((now-aware(latest.sampled_at)).total_seconds()//60))
+            device_age_minutes=None
+            if active_device and active_device.last_seen:device_age_minutes=max(0,int((now-aware(active_device.last_seen)).total_seconds()//60))
+            effective_age=max([x for x in (sample_age_minutes,device_age_minutes) if x is not None],default=None)
+            freshness='WAITING' if not latest else 'OFFLINE' if effective_age is not None and effective_age>30 else 'STALE' if effective_age is not None and effective_age>15 else 'DELAYED' if effective_age is not None and effective_age>5 else 'LIVE'
+            reported_quality=str(latest.quality or 'REPORTED').upper() if latest else 'WAITING'
+            display_quality=reported_quality if freshness=='LIVE' else freshness
+            universal_signal_cards.append({**card,'direction':direction,'capability':sig.signal_type or spec.get('signal_type'),'purpose':purpose,'dashboard_visual':visual,'tank_orientation':(asset.metadata_json or {}).get('tank_visual',{}).get('orientation','VERTICAL_CYLINDER'),'waiting':not bool(latest),'freshness':freshness,'display_quality':display_quality,'effective_age_minutes':effective_age,'last_reported':bool(latest and freshness!='LIVE')})
     # Monitoring visuals must use a configured process signal, never the first arbitrary reading.
     # Raw *_volts channels remain available for diagnostics/calibration but are not valid
     # engineering-value sources for Temperature, Flow, Pressure, or Totalizer visuals.
@@ -1819,13 +1827,8 @@ def connect_device():
             if kind=='ANDROID_PHONE' and asset.asset_type!='TRACKER':
                 flash('Android Phone can only be connected to a tracking asset.','error');return redirect(url_for('main.connect_device',asset_id=asset.id))
         if kind=='HARDWARE_PROFILE':
-            hardware_connection_mode=request.form.get('hardware_connection_mode','NEW_BOARD').strip().upper()
-            if hardware_connection_mode not in {'NEW_BOARD','USE_EXISTING'}:
-                flash('Select New Board or Use Existing Device.','error');return redirect(url_for('main.connect_device',asset_id=asset.id))
-            existing_connected=_connected_device_for_profile(customer_id,profile['code']) if hardware_connection_mode=='USE_EXISTING' else None
-            if hardware_connection_mode=='USE_EXISTING' and not existing_connected:
-                flash('No single compatible existing device is available. Select New Board to create a claim code.','error');return redirect(url_for('main.connect_device',asset_id=asset.id))
-            if hardware_connection_mode=='USE_EXISTING' and existing_connected:
+            existing_connected=_connected_device_for_profile(customer_id,profile['code'])
+            if asset.asset_type=='TANK' and existing_connected:
                 metadata=dict(asset.metadata_json or {});metadata.update({'onboarding_source':'EXISTING_CONNECTED_DEVICE','profile_code':profile['code'],'shared_device_id':existing_connected.id,'claim_state':'ALREADY_CONNECTED'});asset.metadata_json=metadata
                 ensure_profile_signals(asset,profile)
                 MobileTrackerRegistration.query.filter_by(customer_id=customer_id,asset_id=asset.id,used_at=None).delete(synchronize_session=False)
@@ -1843,7 +1846,7 @@ def connect_device():
             pending_uid=f'AT360-CLAIM-{asset.id:06d}-{secrets.token_hex(3).upper()}'
             reg=MobileTrackerRegistration(customer_id=customer_id,asset_id=asset.id,code_hash=mobile_code_hash(code),device_uid=pending_uid,expires_at=utcnow()+timedelta(minutes=10),created_by=current_user.id,onboarding_kind='HARDWARE',profile_code=profile['code'],provisioning_state='WAITING')
             db.session.add(reg);db.session.flush()
-            audit(customer_id,'HARDWARE_CLAIM_STARTED',asset.id,None,'USER',current_user.id,f"{profile['code']} NEW_BOARD claim code created; full verified board capability set will be configured after claim")
+            audit(customer_id,'HARDWARE_CLAIM_STARTED',asset.id,None,'USER',current_user.id,f"{profile['code']} claim code created; full verified board capability set will be configured after claim")
             db.session.commit()
             session['onboarding_registration_id']=reg.id
             session['onboarding_registration_code']=code
