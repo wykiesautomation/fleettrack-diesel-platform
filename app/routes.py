@@ -2163,13 +2163,25 @@ def mobile_tracker_location_batch():
     batch_device_id=str(data.get('device_id') or '').strip().upper()
     if batch_device_id and batch_device_id!=device.device_uid.upper():return jsonify(error='device_identity_mismatch'),403
     ensure_mobile_auto_profile(device);accepted=[];duplicates=[];rejected=[]
+    # Fetch reusable batch state once. The previous implementation performed
+    # location, signal and reading queries inside the point loop and evaluated
+    # alert settings for every historical point. On a remote Postgres database
+    # that N+1 pattern could exceed the Gunicorn timeout and take the site down.
+    candidate_sequences=[str(item.get('sequence','')).strip()[:80] for item in points if isinstance(item,dict) and str(item.get('sequence','')).strip()]
+    existing_locations={row[0] for row in Location.query.with_entities(Location.sequence).filter(Location.asset_id==device.asset_id,Location.sequence.in_(candidate_sequences)).all()} if candidate_sequences else set()
+    telemetry_keys=('speed_kmh','heading','gps_accuracy_m','charging_status','battery_percent')
+    signal_map={row.key:row for row in SignalDefinition.query.filter(SignalDefinition.customer_id==device.customer_id,SignalDefinition.asset_id==device.asset_id,SignalDefinition.key.in_(telemetry_keys)).all()}
+    reading_sequences=[f'{sequence}:{key}' for sequence in candidate_sequences for key in telemetry_keys]
+    signal_ids=[signal.id for signal in signal_map.values()]
+    existing_readings={row[0] for row in Reading.query.with_entities(Reading.sequence).filter(Reading.signal_id.in_(signal_ids),Reading.sequence.in_(reading_sequences)).all()} if signal_ids and reading_sequences else set()
+    latest_eval_item=None
     for index,item in enumerate(points):
         if not isinstance(item,dict):rejected.append({'index':index,'error':'invalid_point'});continue
         sequence=str(item.get('sequence','')).strip()[:80]
         point_device_id=str(item.get('device_id') or batch_device_id or device.device_uid).strip().upper()
         if point_device_id!=device.device_uid.upper():rejected.append({'index':index,'sequence':sequence,'error':'device_identity_mismatch'});continue
         if not sequence:rejected.append({'index':index,'error':'sequence_required'});continue
-        if Location.query.filter_by(asset_id=device.asset_id,sequence=sequence).first():duplicates.append(sequence);continue
+        if sequence in existing_locations:duplicates.append(sequence);continue
         try:
             lat=float(item.get('latitude',item.get('lat')));lon=float(item.get('longitude',item.get('lon',item.get('lng'))));acc=max(0,float(item.get('accuracy_m',item.get('accuracy',0)) or 0));speed=max(0,float(item.get('speed_kmh',item.get('speed',0)) or 0))
             if not(-90<=lat<=90 and -180<=lon<=180) or speed>300:raise ValueError()
@@ -2180,9 +2192,13 @@ def mobile_tracker_location_batch():
         db.session.add(Location(customer_id=device.customer_id,asset_id=device.asset_id,sampled_at=sampled,latitude=lat,longitude=lon,speed_kmh=speed,accuracy_m=acc,heading=item.get('heading'),sequence=sequence))
         for key,value in (('speed_kmh',speed),('heading',item.get('heading')),('gps_accuracy_m',acc),('charging_status',1 if item.get('charging') else 0),('battery_percent',item.get('battery_percent'))):
             if value is None:continue
-            sig=SignalDefinition.query.filter_by(customer_id=device.customer_id,asset_id=device.asset_id,key=key).first();reading_sequence=f'{sequence}:{key}'
-            if sig and not Reading.query.filter_by(signal_id=sig.id,sequence=reading_sequence).first():db.session.add(Reading(customer_id=device.customer_id,asset_id=device.asset_id,signal_id=sig.id,sampled_at=sampled,value=max(0,min(100,float(value))) if key=='battery_percent' else float(value),unit=sig.unit,quality='GOOD',sequence=reading_sequence))
-        evaluate_mobile(device,item);accepted.append(sequence)
+            sig=signal_map.get(key);reading_sequence=f'{sequence}:{key}'
+            if sig and reading_sequence not in existing_readings:
+                db.session.add(Reading(customer_id=device.customer_id,asset_id=device.asset_id,signal_id=sig.id,sampled_at=sampled,value=max(0,min(100,float(value))) if key=='battery_percent' else float(value),unit=sig.unit,quality='GOOD',sequence=reading_sequence));existing_readings.add(reading_sequence)
+        latest_eval_item=item;existing_locations.add(sequence);accepted.append(sequence)
+    # Alert state represents the newest accepted observation, not every queued
+    # historical observation. Evaluate once per batch to keep the request bounded.
+    if latest_eval_item is not None:evaluate_mobile(device,latest_eval_item)
     policy=trend_policy_for(device)
     if not policy.gps_history_enabled:policy.gps_history_enabled=True;policy.gps_retention_days=31
     device.last_seen=utcnow();device.asset.last_seen=utcnow();batch_versions=[str(p.get('client_version') or '')[:40] for p in points if isinstance(p,dict) and p.get('client_version')];device.firmware=(batch_versions[-1] if batch_versions else device.firmware);db.session.commit()

@@ -19,7 +19,7 @@ def test_batch_accepts_current_and_legacy_gps_field_names():
 
 def test_valid_points_are_still_stored_and_duplicates_safe():
     b=batch_block()
-    assert 'Location.query.filter_by(asset_id=device.asset_id,sequence=sequence).first()' in b
+    assert 'existing_locations' in b and 'sequence in existing_locations' in b
     assert 'db.session.add(Location(' in b
     assert 'accepted.append(sequence)' in b
     assert "status='processed'" in b

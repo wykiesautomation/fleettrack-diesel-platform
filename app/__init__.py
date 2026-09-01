@@ -98,8 +98,12 @@ def create_app(test_config=None):
             "pool_pre_ping": True,
             "pool_recycle": 300,
             "pool_timeout": 30,
-            "pool_size": 5,
-            "max_overflow": 5,
+            "pool_size": 4,
+            "max_overflow": 2,
+            "connect_args": {
+                "connect_timeout": 10,
+                "options": "-c statement_timeout=25000",
+            },
         }
 
     app.config.update(
