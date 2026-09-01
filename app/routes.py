@@ -1819,8 +1819,13 @@ def connect_device():
             if kind=='ANDROID_PHONE' and asset.asset_type!='TRACKER':
                 flash('Android Phone can only be connected to a tracking asset.','error');return redirect(url_for('main.connect_device',asset_id=asset.id))
         if kind=='HARDWARE_PROFILE':
-            existing_connected=_connected_device_for_profile(customer_id,profile['code'])
-            if asset.asset_type=='TANK' and existing_connected:
+            hardware_connection_mode=request.form.get('hardware_connection_mode','NEW_BOARD').strip().upper()
+            if hardware_connection_mode not in {'NEW_BOARD','USE_EXISTING'}:
+                flash('Select New Board or Use Existing Device.','error');return redirect(url_for('main.connect_device',asset_id=asset.id))
+            existing_connected=_connected_device_for_profile(customer_id,profile['code']) if hardware_connection_mode=='USE_EXISTING' else None
+            if hardware_connection_mode=='USE_EXISTING' and not existing_connected:
+                flash('No single compatible existing device is available. Select New Board to create a claim code.','error');return redirect(url_for('main.connect_device',asset_id=asset.id))
+            if hardware_connection_mode=='USE_EXISTING' and existing_connected:
                 metadata=dict(asset.metadata_json or {});metadata.update({'onboarding_source':'EXISTING_CONNECTED_DEVICE','profile_code':profile['code'],'shared_device_id':existing_connected.id,'claim_state':'ALREADY_CONNECTED'});asset.metadata_json=metadata
                 ensure_profile_signals(asset,profile)
                 MobileTrackerRegistration.query.filter_by(customer_id=customer_id,asset_id=asset.id,used_at=None).delete(synchronize_session=False)
@@ -1838,7 +1843,7 @@ def connect_device():
             pending_uid=f'AT360-CLAIM-{asset.id:06d}-{secrets.token_hex(3).upper()}'
             reg=MobileTrackerRegistration(customer_id=customer_id,asset_id=asset.id,code_hash=mobile_code_hash(code),device_uid=pending_uid,expires_at=utcnow()+timedelta(minutes=10),created_by=current_user.id,onboarding_kind='HARDWARE',profile_code=profile['code'],provisioning_state='WAITING')
             db.session.add(reg);db.session.flush()
-            audit(customer_id,'HARDWARE_CLAIM_STARTED',asset.id,None,'USER',current_user.id,f"{profile['code']} claim code created; full verified board capability set will be configured after claim")
+            audit(customer_id,'HARDWARE_CLAIM_STARTED',asset.id,None,'USER',current_user.id,f"{profile['code']} NEW_BOARD claim code created; full verified board capability set will be configured after claim")
             db.session.commit()
             session['onboarding_registration_id']=reg.id
             session['onboarding_registration_code']=code
