@@ -1,0 +1,45 @@
+/* Final primary-action contrast override. Loaded last on every authenticated page. */
+:root{
+  --at360-primary-bg:#18c7e8;
+  --at360-primary-hover:#55dcf2;
+  --at360-primary-text:#031923;
+}
+
+/* Cyan primary actions always use dark navy text, including visited links. */
+:is(
+  a.primary,a.asset-add,a.claim-primary,a.dp-primary,
+  button.primary,button.btn-primary,input.primary,input[type="submit"].primary,
+  .primary-action,.button.primary,.btn.primary,.save-actions .primary
+),
+:is(
+  a.primary,a.asset-add,a.claim-primary,a.dp-primary,
+  .primary-action,.button.primary,.btn.primary,.save-actions .primary
+):is(:link,:visited){
+  background:var(--at360-primary-bg)!important;
+  border-color:var(--at360-primary-bg)!important;
+  color:var(--at360-primary-text)!important;
+  -webkit-text-fill-color:var(--at360-primary-text)!important;
+  opacity:1!important;
+  font-weight:850!important;
+  text-decoration:none!important;
+}
+
+:is(
+  a.primary,a.asset-add,a.claim-primary,a.dp-primary,
+  button.primary,button.btn-primary,input.primary,input[type="submit"].primary,
+  .primary-action,.button.primary,.btn.primary,.save-actions .primary
+):not(:disabled):hover{
+  background:var(--at360-primary-hover)!important;
+  border-color:var(--at360-primary-hover)!important;
+  color:var(--at360-primary-text)!important;
+  -webkit-text-fill-color:var(--at360-primary-text)!important;
+}
+
+:is(
+  a.primary,a.asset-add,a.claim-primary,a.dp-primary,
+  button.primary,button.btn-primary,input.primary,input[type="submit"].primary,
+  .primary-action,.button.primary,.btn.primary,.save-actions .primary
+):focus-visible{
+  outline:3px solid #9dde35!important;
+  outline-offset:3px!important;
+}
