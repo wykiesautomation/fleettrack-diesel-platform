@@ -28,7 +28,7 @@
         <div class="device-action-buttons">
           {% if item.asset %}<a class="device-btn" href="{{detail_url}}">{{'Open Tracking' if mobile else 'Open Asset'}}</a><a class="device-btn" href="{{url_for('main.universal_device_panel',asset_id=item.asset.id)}}">Device Studio</a><form method="post" action="{{url_for('main.unlink_asset_device',device_id=item.device.id)}}"><button class="device-btn warning" type="submit" onclick="return confirm('Unlink {{item.device.device_uid}} from {{item.asset.name}}? Asset history will be retained.')">Unlink from Asset</button></form>{% endif %}
           <form method="post" action="{{url_for('main.toggle_device',device_id=item.device.id)}}"><button class="device-btn {{'warning' if item.device.active else 'success'}}" type="submit" onclick="return confirm('{{'Disable' if item.device.active else 'Enable'}} {{item.device.device_uid}}?')">{{'Disable Device' if item.device.active else 'Enable Device'}}</button></form>
-          {% if not item.device.active %}<form method="post" action="{{url_for('main.delete_device',device_id=item.device.id)}}"><button class="device-btn danger" type="submit" onclick="return confirm('Permanently delete {{item.device.device_uid}}? The linked asset and history will be retained. This cannot be undone.')">Delete Device Permanently</button></form>{% else %}<span class="delete-lock">Disable this device before permanent deletion becomes available.</span>{% endif %}
+          <span class="delete-lock">Permanent deletion is available only in Data Management after Disable and Unlink.</span>
         </div>
       </section>
     </article>
