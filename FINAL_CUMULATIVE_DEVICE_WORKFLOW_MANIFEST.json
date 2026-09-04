@@ -1,0 +1,58 @@
+{
+  "release": "AssetTrack 360 Final Cumulative Device Workflow",
+  "baseline": "latest uploaded fleettrack.zip.txt",
+  "created_utc": "2026-09-04T13:18:44.589446+00:00",
+  "tests": "17 passed",
+  "files": [
+    {
+      "path": "app/device_api.py",
+      "size": 18956,
+      "sha256": "824b73e317f21019c183b274cafb5b5b28f972177769155b09ca6e1a0da45dda"
+    },
+    {
+      "path": "app/routes.py",
+      "size": 337479,
+      "sha256": "66ef1ef07e29023a3d27e544a0037afb488f6bda9797c96a24f2a4259f4eee7e"
+    },
+    {
+      "path": "app/templates/trends_limits.html",
+      "size": 17949,
+      "sha256": "4fa56549b0d9cb6bd31b797e07c2f5a571df9419ae8ded85b7ceb09d084bebf4"
+    },
+    {
+      "path": "app/templates/base.html",
+      "size": 4637,
+      "sha256": "cd3d0d9a170ebf9cf8c295d74c16d69a86f4ce2c06e6b68531776a50170a458f"
+    },
+    {
+      "path": "app/templates/asset_device_setup.html",
+      "size": 9725,
+      "sha256": "7439e7454baf3f2141765c74a1b554aa27ec5f7ed8813eeda298afcaf808312f"
+    },
+    {
+      "path": "app/templates/devices.html",
+      "size": 6835,
+      "sha256": "f44fa1944c25b5c25037424f01246df4fe3805cded1ce882d1b0bbd8bc7fa053"
+    },
+    {
+      "path": "app/templates/test_data_cleanup.html",
+      "size": 7191,
+      "sha256": "3de2bb4ab025554bdff930dbedc27bc73ca88b61f9c24e503f2ba11e1019429b"
+    },
+    {
+      "path": "app/static/primary_action_text_fix.css",
+      "size": 1409,
+      "sha256": "6e41e935d84243a71a0f5f236792f2a9842af5dcf39fc41d57b4a80503cad024"
+    },
+    {
+      "path": "tests/test_final_cumulative_device_workflow.py",
+      "size": 2300,
+      "sha256": "156527c1b4b7b9c2f3069c277e30de84560eefc8f7f453c479c35dc088b0ac1f"
+    },
+    {
+      "path": "BUILD_FINAL_CUMULATIVE_DEVICE_WORKFLOW.md",
+      "size": 730,
+      "sha256": "fd95cfc5b909d5d46c21b4a6430c267cde736d9e96cce90fe79e04df8362b38c"
+    }
+  ]
+}
