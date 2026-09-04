@@ -1,0 +1,43 @@
+{
+  "release": "AssetTrack 360 Centralized Data Management",
+  "baseline": "uploaded fleettrack.zip.txt",
+  "created_utc": "2026-09-04T12:32:18.804512+00:00",
+  "tests": "5 passed",
+  "files": [
+    {
+      "path": "app/routes.py",
+      "size": 336961,
+      "sha256": "cce09b2a95ade4d82be092cff97ff14b71c7ca6228433f950d266ee2ec6c82eb"
+    },
+    {
+      "path": "app/templates/base.html",
+      "size": 4540,
+      "sha256": "4c3510b0a60fd5949c002cc02465ec8022175d1edaf3e19bd576a76dfe81e25c"
+    },
+    {
+      "path": "app/templates/asset_device_setup.html",
+      "size": 9725,
+      "sha256": "7439e7454baf3f2141765c74a1b554aa27ec5f7ed8813eeda298afcaf808312f"
+    },
+    {
+      "path": "app/templates/devices.html",
+      "size": 6835,
+      "sha256": "f44fa1944c25b5c25037424f01246df4fe3805cded1ce882d1b0bbd8bc7fa053"
+    },
+    {
+      "path": "app/templates/test_data_cleanup.html",
+      "size": 7285,
+      "sha256": "a00d831e8f5e204d9a3dff291f66637768dfa50b47da1862b4732b98f1069386"
+    },
+    {
+      "path": "tests/test_centralized_data_management.py",
+      "size": 1476,
+      "sha256": "7ff153832b1df7c40d26b07b77c5f76ef53980da17087da4251a3a1000442ee2"
+    },
+    {
+      "path": "BUILD_CENTRALIZED_DATA_MANAGEMENT.md",
+      "size": 630,
+      "sha256": "0625da13756c4295f4e82de71b7fd5cb3155c5dd451bbf5021fb7bdbde740997"
+    }
+  ]
+}
