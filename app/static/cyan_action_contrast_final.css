@@ -1,0 +1,104 @@
+/* Final cross-application cyan action contrast layer.
+   Every bright-cyan action uses dark navy text in normal, visited, hover and active states. */
+:root{
+  --at360-cyan-action:#18c7e8;
+  --at360-cyan-action-hover:#55dcf2;
+  --at360-cyan-action-text:#031923;
+}
+
+:is(
+  a.asset-add,
+  a.new-device,
+  a.primary,
+  a.claim-primary,
+  a.dp-primary,
+  a.primary-action,
+  a.button.primary,
+  a.btn.primary,
+  .twin .modes a.btn,
+  button.primary,
+  button.btn-primary,
+  input.primary,
+  input[type="submit"].primary,
+  .save-actions .primary
+),
+:is(
+  a.asset-add,
+  a.new-device,
+  a.primary,
+  a.claim-primary,
+  a.dp-primary,
+  a.primary-action,
+  a.button.primary,
+  a.btn.primary,
+  .twin .modes a.btn,
+  .save-actions .primary
+):is(:link,:visited){
+  background:var(--at360-cyan-action)!important;
+  border-color:var(--at360-cyan-action)!important;
+  color:var(--at360-cyan-action-text)!important;
+  -webkit-text-fill-color:var(--at360-cyan-action-text)!important;
+  opacity:1!important;
+  font-weight:850!important;
+  text-decoration:none!important;
+  text-shadow:none!important;
+}
+
+:is(
+  a.asset-add,
+  a.new-device,
+  a.primary,
+  a.claim-primary,
+  a.dp-primary,
+  a.primary-action,
+  a.button.primary,
+  a.btn.primary,
+  .twin .modes a.btn,
+  button.primary,
+  button.btn-primary,
+  input.primary,
+  input[type="submit"].primary,
+  .save-actions .primary
+):not(:disabled):hover{
+  background:var(--at360-cyan-action-hover)!important;
+  border-color:var(--at360-cyan-action-hover)!important;
+  color:var(--at360-cyan-action-text)!important;
+  -webkit-text-fill-color:var(--at360-cyan-action-text)!important;
+  opacity:1!important;
+}
+
+:is(
+  a.asset-add,
+  a.new-device,
+  a.primary,
+  a.claim-primary,
+  a.dp-primary,
+  a.primary-action,
+  a.button.primary,
+  a.btn.primary,
+  .twin .modes a.btn,
+  button.primary,
+  button.btn-primary,
+  input.primary,
+  input[type="submit"].primary,
+  .save-actions .primary
+):focus-visible{
+  outline:3px solid #9dde35!important;
+  outline-offset:3px!important;
+}
+
+/* Disabled cyan actions must no longer look selectable, but remain readable. */
+:is(
+  button.primary,
+  button.btn-primary,
+  input.primary,
+  input[type="submit"].primary
+):disabled,
+:is(a.asset-add,a.new-device,a.primary,a.claim-primary,a.dp-primary,a.primary-action,a.button.primary,a.btn.primary)[aria-disabled="true"]{
+  background:#294653!important;
+  border-color:#527384!important;
+  color:#e5f1f5!important;
+  -webkit-text-fill-color:#e5f1f5!important;
+  opacity:1!important;
+  cursor:not-allowed!important;
+}
