@@ -1,48 +1,24 @@
 {% extends "base.html" %}
-{% block head_extra %}
-<style>
-.cmd{display:grid;grid-template-columns:250px minmax(0,1fr);gap:28px}
-.side{background:#08283a;border:1px solid #174b60;border-radius:18px;padding:20px;position:sticky;top:18px;height:max-content}
-.side h2{margin:0}.side small{color:#8fc3cf}
-.side a{display:block;color:#a9d4dd;text-decoration:none;padding:12px 14px;margin-top:6px;border-radius:10px}
-.side a:hover,.side a.active{background:#10465c;color:#fff;border-left:4px solid #15c9e8}
-.admin-main{min-width:0}
-.admin-top,.admin-hero,.top,.hero{display:flex;justify-content:space-between;align-items:center;gap:15px;background:#08283a;border:1px solid #174b60;border-radius:18px;padding:20px;margin-bottom:18px}
-.admin-top h1,.admin-hero h1,.hero h1{margin:0}
-.admin-cards,.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(175px,1fr));gap:14px;margin-bottom:18px}
-.admin-card,.admin-panel,.card,.panel{background:#fff;color:#082536;border-radius:16px;padding:18px}
-.admin-card b,.card b{display:block;font-size:1.9rem}
-.admin-muted,.muted{color:#68818a}.admin-good,.good{color:#178341}.admin-warn,.warn{color:#a56b00}.admin-bad,.bad{color:#be3030}
-.admin-btn,.btn{display:inline-block;border:0;border-radius:9px;padding:10px 13px;background:#078398;color:#fff;text-decoration:none;cursor:pointer}
-.admin-danger,.danger{background:#b62f2f}
-.admin-tag,.tag{display:inline-block;padding:4px 9px;border-radius:20px;background:#e5f3f5}
-.admin-tools,.admin-actions,.tools,.actions{display:flex;gap:9px;flex-wrap:wrap;margin-bottom:15px}
-.admin-tools input,.admin-tools select,.admin-control,.tools input,.tools select,input.control,select.control{padding:10px;border:1px solid #bccdd2;border-radius:9px;min-width:190px}
-.admin-scroll,.scroll{overflow:auto}
-.admin-table,.table{width:100%;border-collapse:collapse}
-.admin-table th,.admin-table td,.table th,.table td{padding:11px;border-bottom:1px solid #dce7ea;text-align:left;vertical-align:top}
-.admin-table th,.table th{font-size:.78rem;text-transform:uppercase}
-@media(max-width:900px){.cmd{grid-template-columns:1fr}.side{position:static}.side a{display:inline-block}}
-</style>
-{% endblock %}
+{% block head_extra %}<link rel="stylesheet" href="{{url_for('static',filename='admin_layout_final.css',v='4')}}">{% endblock %}
 {% block body %}
-<div class="cmd">
-  <aside class="side">
-    <h2>AssetTrack 360</h2>
-    <small>Platform Administration</small>
+<div class="admin-shell">
+  <aside class="admin-nav">
+    <div class="admin-nav-brand"><h2>AssetTrack 360</h2><small>Platform Administration</small></div>
     {% set ep = request.endpoint %}
-    <a class="{{ 'active' if ep == 'admin.dashboard' }}" href="{{ url_for('admin.dashboard') }}">Overview</a>
-    <a class="{{ 'active' if ep in ['admin.customers', 'admin.customer_detail'] }}" href="{{ url_for('admin.customers') }}">Customers</a>
-    <a class="{{ 'active' if ep == 'admin.users' }}" href="{{ url_for('admin.users') }}">Users</a>
-    <a class="{{ 'active' if ep == 'admin.subscriptions' }}" href="{{ url_for('admin.subscriptions') }}">Subscriptions</a>
-    <a class="{{ 'active' if ep == 'admin.payments' }}" href="{{ url_for('admin.payments') }}">Payments</a>
-    <a class="{{ 'active' if ep == 'admin.invoices' }}" href="{{ url_for('admin.invoices') }}">Invoices</a>
-    <a class="{{ 'active' if ep == 'admin.devices' }}" href="{{ url_for('admin.devices') }}">Devices</a>
-    <a class="{{ 'active' if ep == 'admin.support' }}" href="{{ url_for('admin.support') }}">Support</a>
-    <a class="{{ 'active' if ep == 'admin.audit_log' }}" href="{{ url_for('admin.audit_log') }}">Audit Log</a>
-    <a class="{{ 'active' if ep == 'admin.settings' }}" href="{{ url_for('admin.settings') }}">Platform Settings</a>
+    <nav aria-label="Platform administration">
+      <a class="{{ 'active' if ep == 'admin.dashboard' }}" href="{{ url_for('admin.dashboard') }}">Overview</a>
+      <a class="{{ 'active' if ep in ['admin.customers', 'admin.customer_detail'] }}" href="{{ url_for('admin.customers') }}">Customers</a>
+      <a class="{{ 'active' if ep == 'admin.users' }}" href="{{ url_for('admin.users') }}">Users</a>
+      <a class="{{ 'active' if ep == 'admin.subscriptions' }}" href="{{ url_for('admin.subscriptions') }}">Subscriptions</a>
+      <a class="{{ 'active' if ep in ['admin.payments', 'admin.payment_detail'] }}" href="{{ url_for('admin.payments') }}">Payments</a>
+      <a class="{{ 'active' if ep in ['admin.invoices', 'admin.invoice_detail'] }}" href="{{ url_for('admin.invoices') }}">Invoices</a>
+      <a class="{{ 'active' if ep == 'admin.devices' }}" href="{{ url_for('admin.devices') }}">Devices</a>
+      <a class="{{ 'active' if ep == 'admin.support' }}" href="{{ url_for('admin.support') }}">Support</a>
+      <a class="{{ 'active' if ep == 'admin.audit_log' }}" href="{{ url_for('admin.audit_log') }}">Audit Log</a>
+      <a class="{{ 'active' if ep == 'admin.settings' }}" href="{{ url_for('admin.settings') }}">Platform Settings</a>
+    </nav>
   </aside>
-  <section class="admin-main">
+  <section class="admin-content">
     {% block admin %}{% endblock %}
   </section>
 </div>
