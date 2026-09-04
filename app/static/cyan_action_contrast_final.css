@@ -102,3 +102,37 @@
   opacity:1!important;
   cursor:not-allowed!important;
 }
+
+/* Explicit production selectors. Do not replace with generic selectors. */
+html body .main a.registry-add,
+html body .main a.registry-add:link,
+html body .main a.registry-add:visited,
+html body .main a.asset-add,
+html body .main a.asset-add:link,
+html body .main a.asset-add:visited,
+html body .main a.new-device,
+html body .main a.new-device:link,
+html body .main a.new-device:visited,
+html body .main .twin .modes a.btn,
+html body .main .twin .modes a.btn:link,
+html body .main .twin .modes a.btn:visited {
+  background:#18c7e8!important;
+  border-color:#18c7e8!important;
+  color:#031923!important;
+  -webkit-text-fill-color:#031923!important;
+  opacity:1!important;
+  font-weight:900!important;
+  text-decoration:none!important;
+  text-shadow:none!important;
+}
+
+html body .main a.registry-add:hover,
+html body .main a.asset-add:hover,
+html body .main a.new-device:hover,
+html body .main .twin .modes a.btn:hover {
+  background:#55dcf2!important;
+  border-color:#55dcf2!important;
+  color:#031923!important;
+  -webkit-text-fill-color:#031923!important;
+  opacity:1!important;
+}
