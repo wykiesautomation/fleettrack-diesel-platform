@@ -824,16 +824,20 @@ def replace_asset_device():
 @bp.get('/admin/test-data-cleanup')
 @login_required
 def test_data_cleanup():
+    if current_user.role not in ('customer_admin','platform_admin'):abort(403)
     customer_id=tenant_id()
     assets=Asset.query.filter_by(customer_id=customer_id).order_by(Asset.name,Asset.id).all();items=[]
     for asset in assets:
         items.append({'asset':asset,'active_device':active_device_for(asset),'devices':Device.query.filter_by(customer_id=customer_id,asset_id=asset.id).count(),'locations':Location.query.filter_by(customer_id=customer_id,asset_id=asset.id).count(),'readings':Reading.query.filter_by(customer_id=customer_id,asset_id=asset.id).count(),'alarms':Alarm.query.filter_by(customer_id=customer_id,asset_id=asset.id).count()})
     sites=Site.query.filter_by(customer_id=customer_id).order_by(Site.name,Site.id).all()
     site_items=[{'site':site,'asset_count':Asset.query.filter_by(customer_id=customer_id,site_id=site.id).count()} for site in sites]
-    return render_template('test_data_cleanup.html',items=items,site_items=site_items)
+    devices=Device.query.filter_by(customer_id=customer_id).order_by(Device.device_uid).all()
+    device_items=[{'device':device,'deletable':bool(not device.active and not device.asset_id)} for device in devices]
+    return render_template('test_data_cleanup.html',items=items,site_items=site_items,device_items=device_items)
 @bp.post('/admin/test-data-cleanup/delete')
 @login_required
 def delete_test_asset():
+    if current_user.role not in ('customer_admin','platform_admin'):abort(403)
     asset_id=request.form.get('asset_id',type=int)
     confirm_name=request.form.get('confirm_name','').strip()
     confirm_word=request.form.get('confirm_word','').strip().upper()
@@ -882,6 +886,7 @@ def delete_test_asset():
 @bp.post('/admin/test-data-cleanup/delete-site')
 @login_required
 def delete_test_site():
+    if current_user.role not in ('customer_admin','platform_admin'):abort(403)
     customer_id=tenant_id()
     site_id=request.form.get('site_id',type=int)
     confirm_name=request.form.get('confirm_name','').strip()
