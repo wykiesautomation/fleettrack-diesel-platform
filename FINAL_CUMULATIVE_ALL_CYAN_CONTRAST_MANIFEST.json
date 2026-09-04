@@ -1,0 +1,28 @@
+{
+  "release": "AssetTrack 360 Final Cumulative All Cyan Contrast",
+  "baseline": "AssetTrack 360 Final Cumulative Device Workflow",
+  "created_utc": "2026-09-04T13:34:07.686842+00:00",
+  "tests": "22 passed",
+  "files": [
+    {
+      "path": "app/templates/base.html",
+      "size": 4737,
+      "sha256": "e9508361c74117a44eb4a1ff0e5970c212bfbd51600380e2da0f1f48462c9fe2"
+    },
+    {
+      "path": "app/static/cyan_action_contrast_final.css",
+      "size": 2534,
+      "sha256": "1a4d11aae75822875d422bba16914ccf60c3f3d931065b239d6daf8ae6a271bc"
+    },
+    {
+      "path": "tests/test_all_cyan_action_contrast.py",
+      "size": 1496,
+      "sha256": "b8132b9348b0f22687a9df4ca54312c337016ba5e8a74b072b2fbc6fa3824db1"
+    },
+    {
+      "path": "BUILD_ALL_CYAN_ACTION_CONTRAST_FINAL.md",
+      "size": 602,
+      "sha256": "692a8ad67c1bd21f3630c76f09a0b7381eafcb3f49d9aa93d60e7dcd81dfee40"
+    }
+  ]
+}
