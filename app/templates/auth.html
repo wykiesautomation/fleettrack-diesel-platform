@@ -1,0 +1,60 @@
+{% extends 'base.html' %}
+{% block title %}{{ 'Create Account' if mode == 'register' else 'Customer Login' }} | AssetTrack 360{% endblock %}
+{% block head_extra %}
+<style>
+.auth-page{min-height:calc(100vh - 90px);display:grid;place-items:center;padding:36px 18px;background:radial-gradient(circle at 50% 0,rgba(0,194,223,.11),transparent 38%)}
+.auth{width:min(100%,560px);margin:0 auto}
+.auth-card{background:linear-gradient(155deg,#102d43 0%,#091f30 100%);border:1px solid #2d617d;border-radius:20px;padding:32px;box-shadow:0 24px 70px rgba(0,0,0,.38)}
+.auth-card .eyebrow{display:inline-block;color:#63e8f6!important;background:#0a3747;border:1px solid #246578;border-radius:999px;padding:6px 10px;font-size:11px;font-weight:900;letter-spacing:1.3px}
+.auth-card h1{margin:14px 0 22px!important;color:#f6fbff!important;font-family:Segoe UI,Arial,sans-serif!important;font-size:32px!important;line-height:1.15!important;font-weight:800!important}
+.auth-card h3{margin:0 0 13px;color:#f1f8fb!important;font-size:17px!important}
+.auth-card label{display:block;margin-top:15px;color:#c7dbe5!important;font-size:13px!important;font-weight:700!important;line-height:1.35}
+.auth-card input{display:block;width:100%;height:48px;margin-top:7px;padding:0 14px;border-radius:10px;border:1px solid #42728c!important;background:#061a29!important;color:#ffffff!important;caret-color:#00d6ee;font-family:Segoe UI,Arial,sans-serif!important;font-size:15px!important;outline:none;box-shadow:none!important}
+.auth-card input::placeholder{color:#7898aa!important}
+.auth-card input:focus{border-color:#00d6ee!important;box-shadow:0 0 0 3px rgba(0,214,238,.16)!important}
+.auth-card input:-webkit-autofill{-webkit-text-fill-color:#fff!important;-webkit-box-shadow:0 0 0 1000px #061a29 inset!important;transition:background-color 9999s ease-out}
+.auth-card .button,.auth-card button{min-height:46px;width:100%;margin-top:18px;padding:11px 16px!important;border:1px solid #3c718a!important;border-radius:10px!important;background:#143c55!important;color:#ecf9ff!important;font-family:Segoe UI,Arial,sans-serif!important;font-size:14px!important;font-weight:800!important;cursor:pointer;text-align:center;text-decoration:none;box-shadow:none!important}
+.auth-card .button.primary,.auth-card button.primary{background:#00d6ee!important;border-color:#00d6ee!important;color:#031923!important}
+.auth-card .button:hover,.auth-card button:hover{filter:brightness(1.08)}
+.pw-wrap{position:relative}.pw-wrap input{padding-right:78px}.auth-card .pw-toggle{position:absolute;right:7px;top:7px;width:auto!important;min-height:34px;margin:0!important;padding:6px 11px!important;background:#173f57!important;color:#eaf8ff!important;border:1px solid #416f87!important;font-size:12px!important}
+.caps{display:none;color:#ffc66d!important;font-size:11px;font-weight:800;margin-top:7px}
+.resend{margin-top:25px;padding-top:22px;border-top:1px solid #2b536a}
+.auth-card .small{margin:18px 0 0;color:#9db7c4!important;font-size:12px!important;line-height:1.6}
+.auth-card a{color:#5ce5f3!important;font-weight:800;text-decoration:none}.auth-card a:hover{text-decoration:underline}
+.hp{position:absolute!important;left:-10000px!important;opacity:0!important}
+@media(max-width:600px){.auth-page{padding:22px 12px;align-items:start}.auth-card{padding:23px 18px;border-radius:16px}.auth-card h1{font-size:27px!important}}
+</style>
+{% endblock %}
+{% block body %}
+<div class="auth-page"><div class="auth"><div class="auth-card">
+<span class="eyebrow">SECURE ACCESS</span>
+<h1>{{ 'Create your account' if mode == 'register' else 'Customer login' }}</h1>
+{% if mode == 'register' %}
+<form method="post">
+<label>Company<input name="company" required autocomplete="organization"></label>
+<label>Your name<input name="name" required autocomplete="name"></label>
+<label>Email address<input type="email" name="email" required autocomplete="email"></label>
+<label>Password<div class="pw-wrap"><input type="password" name="password" minlength="10" required autocomplete="new-password"><button type="button" class="pw-toggle">Show</button></div><span class="caps">Caps Lock is ON</span></label>
+<label>Confirm password<div class="pw-wrap"><input type="password" name="confirm_password" minlength="10" required autocomplete="new-password"><button type="button" class="pw-toggle">Show</button></div><span class="caps">Caps Lock is ON</span></label>
+<label class="hp" aria-hidden="true">Website<input name="website" tabindex="-1" autocomplete="off"></label>
+<p class="small">A 30-minute verification link will be emailed before the account can be used.</p>
+<button class="button primary">Create account</button>
+</form>
+<p class="small">Already registered? <a href="{{url_for('main.login')}}">Sign in</a></p>
+{% else %}
+<form method="post">
+<label>Email address<input type="email" name="email" required value="{{pending_email or ''}}" autocomplete="email"></label>
+<label>Password<div class="pw-wrap"><input type="password" name="password" required autocomplete="current-password"><button type="button" class="pw-toggle">Show</button></div><span class="caps">Caps Lock is ON</span></label>
+<button class="button primary">Sign in</button>
+</form>
+<div class="resend"><h3>Verification email not received?</h3><form method="post" action="{{url_for('main.resend_verification')}}"><label>Email address<input type="email" name="email" required value="{{pending_email or ''}}" autocomplete="email"></label><button class="button">Resend verification email</button></form></div>
+<p class="small">Need an account? <a href="{{url_for('main.register')}}">Register</a></p>
+{% endif %}
+</div></div></div>
+{% endblock %}
+{% block scripts %}
+<script>
+document.querySelectorAll('.pw-toggle').forEach(button=>button.addEventListener('click',()=>{const input=button.parentElement.querySelector('input');input.type=input.type==='password'?'text':'password';button.textContent=input.type==='password'?'Show':'Hide';}));
+document.querySelectorAll('input[type=password]').forEach(input=>{const warning=input.closest('label')?.querySelector('.caps');['keydown','keyup'].forEach(name=>input.addEventListener(name,event=>{if(warning)warning.style.display=event.getModifierState&&event.getModifierState('CapsLock')?'block':'none';}));});
+</script>
+{% endblock %}
