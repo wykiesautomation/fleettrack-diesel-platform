@@ -912,46 +912,49 @@ def _distance_km(a,b):
     return 2*6371.0088*math.asin(min(1,math.sqrt(value)))
 
 def analyse_tracking_points(rows):
-    """Return a deterministic, segmented historical route from the strict live validator.
-
-    Every rejected observation breaks route continuity. Distance is therefore never
-    drawn or accumulated across poor GPS, stationary drift, impossible gaps or
-    out-of-order observations.
-    """
+    """Build route-grade segments without bridging uncertain GPS gaps."""
     ordered=sorted(rows,key=lambda row:(aware(row.sampled_at),getattr(row,'id',0) or 0))
-    rows=ordered
-    strict=analyse_safety_twin_points(rows)
+    strict=analyse_safety_twin_points(ordered)
     movement_by_time={}
-    for point in strict.get('movement',[]):
-        movement_by_time.setdefault(point['timestamp'],[]).append(point)
-    rejected=[];rejection_counts={};route_segments=[];segments=route_segments;current=[];previous=None
-    for row in ordered:
-        stamp=aware(row.sampled_at).isoformat();matches=movement_by_time.get(stamp) or []
-        point=matches.pop(0) if matches else None
-        if point:
-            current.append(point);previous=point
-            continue
-        accuracy=float(row.accuracy_m) if row.accuracy_m is not None else None
-        reason='POOR_ACCURACY' if accuracy is not None and accuracy>50 else 'STATIONARY_DRIFT'
+    for point in strict.get('movement',[]):movement_by_time.setdefault(point['timestamp'],[]).append(point)
+    rejected=[];rejection_counts={};candidate_segments=[];current=[];previous_point=None;previous_time=None
+    def close_segment():
+        nonlocal current
+        if current:candidate_segments.append(current)
+        current=[]
+    def reject(row,stamp,reason):
         rejected.append({'timestamp':stamp,'latitude':row.latitude,'longitude':row.longitude,'accuracy':row.accuracy_m,'speed':row.speed_kmh,'reason':reason})
         rejection_counts[reason]=rejection_counts.get(reason,0)+1
-        if current:segments.append(current);current=[]
-        previous=None
-    if current:route_segments.append(current)
-
+    for row in ordered:
+        row_time=aware(row.sampled_at);stamp=row_time.isoformat();matches=movement_by_time.get(stamp) or [];point=matches.pop(0) if matches else None
+        if not point:
+            accuracy=float(row.accuracy_m) if row.accuracy_m is not None else None;reason='POOR_ACCURACY' if accuracy is not None and accuracy>50 else 'STATIONARY_DRIFT'
+            reject(row,stamp,reason);close_segment();previous_point=None;previous_time=None;continue
+        if previous_time is not None:
+            gap_seconds=(row_time-previous_time).total_seconds()
+            if gap_seconds<=0:
+                reject(row,stamp,'OUT_OF_ORDER');close_segment();previous_point=None;previous_time=None;continue
+            if gap_seconds>120:
+                close_segment();previous_point=None;previous_time=None
+            elif previous_point is not None:
+                jump_km=_distance_dict(previous_point,point);implied_kmh=jump_km/(gap_seconds/3600.0)
+                if jump_km>2.0 or implied_kmh>180.0:
+                    reject(row,stamp,'IMPLAUSIBLE_JUMP');close_segment();previous_point=None;previous_time=None;continue
+        current.append(point);previous_point=point;previous_time=row_time
+    close_segment();route_segments=[]
+    for fragment in candidate_segments:
+        if len(fragment)>=3:route_segments.append(fragment)
+        else:
+            for point in fragment:
+                rejection_counts['INSUFFICIENT_ROUTE_EVIDENCE']=rejection_counts.get('INSUFFICIENT_ROUTE_EVIDENCE',0)+1
+                rejected.append({**point,'reason':'INSUFFICIENT_ROUTE_EVIDENCE'})
     distance=0.0;journeys=[]
     for number,segment in enumerate(route_segments,1):
         total=sum(_distance_dict(x,y) for x,y in zip(segment,segment[1:]));distance+=total
-        if segment:
-            journeys.append({'number':number,'started_at':segment[0]['timestamp'],'ended_at':segment[-1]['timestamp'],'point_count':len(segment),'distance_km':round(total,3),'maximum_speed':round(max(float(x.get('speed') or 0) for x in segment),1)})
-
-    # Strict drift observations are retained as diagnostic stop evidence, never route distance.
-    stops=[]
-    for drift in strict.get('drift',[]):
-        stops.append({'timestamp':drift.get('timestamp'),'latitude':drift.get('latitude'),'longitude':drift.get('longitude'),'accuracy':drift.get('accuracy'),'reason':'STATIONARY_DRIFT'})
-    accepted=[point for segment in route_segments for point in segment]
-    last=accepted[-1] if accepted else (strict.get('drift') or [None])[-1]
-    return {'points':accepted,'last':last,'accepted':accepted,'rejected':rejected,'segments':route_segments,'journeys':journeys,'stops':stops,'total_km':round(distance,2),'distance_km':round(distance,2),'max_speed':strict['maximum_speed'],'maximum_speed':strict['maximum_speed'],'moving_minutes':strict['movement_minutes'],'movement_minutes':strict['movement_minutes'],'stopped_minutes':strict['stationary_minutes'],'stationary_minutes':strict['stationary_minutes'],'rejection_counts':rejection_counts,'confidence':strict['confidence'],'state':strict['state'],'raw_count':strict['raw_count'],'movement_count':len(accepted),'drift_count':strict['drift_count'],'rejected_count':len(rejected),'low_quality_count':strict.get('low_quality_count',0),'raw_speed':strict['raw'][-1]['speed'] if strict['raw'] else None}
+        journeys.append({'number':number,'started_at':segment[0]['timestamp'],'ended_at':segment[-1]['timestamp'],'point_count':len(segment),'distance_km':round(total,3),'maximum_speed':round(max(float(x.get('speed') or 0) for x in segment),1)})
+    stops=[{'timestamp':x.get('timestamp'),'latitude':x.get('latitude'),'longitude':x.get('longitude'),'accuracy':x.get('accuracy'),'reason':'STATIONARY_DRIFT'} for x in strict.get('drift',[])]
+    accepted=[point for segment in route_segments for point in segment];context_points=strict.get('movement') or strict.get('drift') or [];last=accepted[-1] if accepted else (context_points[-1] if context_points else None);state=strict['state'] if accepted else ('WAITING_FOR_VALIDATED_ROUTE' if ordered else strict['state'])
+    return {'points':accepted,'last':last,'accepted':accepted,'rejected':rejected,'segments':route_segments,'journeys':journeys,'stops':stops,'total_km':round(distance,2),'distance_km':round(distance,2),'max_speed':strict['maximum_speed'] if accepted else 0,'maximum_speed':strict['maximum_speed'] if accepted else 0,'moving_minutes':strict['movement_minutes'] if accepted else 0,'movement_minutes':strict['movement_minutes'] if accepted else 0,'stopped_minutes':strict['stationary_minutes'],'stationary_minutes':strict['stationary_minutes'],'rejection_counts':rejection_counts,'confidence':strict['confidence'] if accepted else 0,'state':state,'raw_count':strict['raw_count'],'movement_count':len(accepted),'drift_count':strict['drift_count'],'rejected_count':len(rejected),'low_quality_count':strict.get('low_quality_count',0),'raw_speed':strict['raw'][-1]['speed'] if strict['raw'] else None}
 
 def _distance_dict(a,b):
     import math

@@ -164,19 +164,25 @@ def audit_log():return render_template('platform_admin_audit.html',rows=Security
 @admin_bp.get('/settings')
 @owner_only
 def settings():return render_template('platform_admin_settings.html',plans=SubscriptionPlan.query.order_by(SubscriptionPlan.monthly_price).all())
+@admin_bp.get('/data-management')
+@owner_only
+def data_management():
+ rows=[]
+ for c in Customer.query.filter(Customer.slug!='platform-admin').order_by(Customer.name).all():rows.append({'customer':c,'users':User.query.filter_by(customer_id=c.id).count(),'assets':Asset.query.filter_by(customer_id=c.id).count(),'devices':Device.query.filter_by(customer_id=c.id).count()})
+ return render_template('platform_admin_data_management.html',rows=rows)
 @admin_bp.post('/customers/<int:customer_id>/delete')
 @owner_only
 def delete_customer(customer_id):
  c=Customer.query.filter(Customer.id==customer_id,Customer.slug!='platform-admin').first_or_404()
- if request.form.get('confirm_name','').strip()!=c.name or request.form.get('confirm_word','').strip().upper()!='DELETE':flash('Exact customer name and DELETE required.','error');return redirect(url_for('admin.customer_detail',customer_id=customer_id))
+ if request.form.get('confirm_name','').strip()!=c.name or request.form.get('confirm_word','').strip().upper()!='DELETE':flash('Exact customer name and DELETE required.','error');return redirect(url_for('admin.data_management'))
  cid=c.id
  try:
   connector_ids=[x.id for x in IntegrationConnector.query.filter_by(customer_id=cid).all()]
   if connector_ids:ConnectorEndpointConfig.query.filter(ConnectorEndpointConfig.connector_id.in_(connector_ids)).delete(synchronize_session=False)
   for model in (Reading,Location,Alarm,CoreAlarmState,DataDeletionRequest,MobileConsent,MobileTrackerRegistration,SecurityAuditEvent,AssetFeatureOverride,AssetAlertSettings,FleetFeatureDefaults,MqttMessageEvent,MqttTopicMapping,MqttSubscription,WebhookReceipt,IntegrationJobEvent,UniversalSourceMapping,IntegrationSignalMapping,IntegrationEvent,EdgeGateway,PaymentRecord,SubscriptionAuditEvent,SignalDefinition,Device,Asset,Site,WorkspaceProfile,Subscription,User):
    if hasattr(model,'customer_id'):model.query.filter_by(customer_id=cid).delete(synchronize_session=False)
-  IntegrationConnector.query.filter_by(customer_id=cid).delete(synchronize_session=False);name=c.name;db.session.delete(c);db.session.commit();flash(name+' deleted.','ok');return redirect(url_for('admin.customers'))
- except Exception as exc:db.session.rollback();flash('Delete blocked safely: '+type(exc).__name__+'. No partial deletion committed.','error');return redirect(url_for('admin.customer_detail',customer_id=cid))
+  IntegrationConnector.query.filter_by(customer_id=cid).delete(synchronize_session=False);name=c.name;db.session.delete(c);db.session.commit();flash(name+' deleted.','ok');return redirect(url_for('admin.data_management'))
+ except Exception as exc:db.session.rollback();flash('Delete blocked safely: '+type(exc).__name__+'. No partial deletion committed.','error');return redirect(url_for('admin.data_management'))
 
 
 @admin_bp.get('/search')
