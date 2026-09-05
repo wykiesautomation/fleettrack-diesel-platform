@@ -1,0 +1,54 @@
+{% extends 'base.html' %}
+{% block title %}Devices & Sources | AssetTrack 360{% endblock %}
+{% block head_extra %}<link rel="stylesheet" href="{{url_for('static',filename='devices_unified_rev28.css',v='manage-1')}}"><style>
+.registry-row.device-manage-row{display:grid;grid-template-columns:58px 1.25fr 1fr .65fr .75fr auto;gap:16px;align-items:center;cursor:default}.registry-row.device-manage-row:hover{transform:none}.registry-manage{min-height:38px;padding:8px 13px;border:1px solid #3a718e;border-radius:9px;background:#163b54;color:#fff;font-weight:850;cursor:pointer}.registry-manage:hover{border-color:var(--cyan);background:#194b68}.device-actions{display:none;grid-column:1/-1;margin-top:3px;padding:14px;background:#071c2b;border:1px solid #315f78;border-radius:11px}.device-manage-row.actions-open .device-actions{display:block}.device-action-summary{display:grid;grid-template-columns:1.2fr 1fr .55fr;gap:10px;margin-bottom:12px}.device-action-summary span{padding:10px;background:#0d2c41;border-radius:8px}.device-action-summary small{display:block;color:#80abc0;font-size:9px}.device-action-summary b{display:block;margin-top:4px;overflow-wrap:anywhere}.device-action-buttons{display:flex;align-items:center;gap:9px;flex-wrap:wrap}.device-action-buttons form{margin:0}.device-btn{display:inline-flex;align-items:center;justify-content:center;min-height:39px;padding:9px 12px;border:1px solid #3a718e;border-radius:9px;background:#163b54;color:#fff;font-weight:850;text-decoration:none;cursor:pointer}.device-btn:hover{border-color:var(--cyan);background:#194b68}.device-btn.warning{border-color:#b87924;color:#ffd27a}.device-btn.success{border-color:#739b34;color:#c9f26d}.device-btn.danger{border-color:#aa4052;background:#4b1e29;color:#ffb2bc}.delete-lock{font-size:10px;color:var(--muted)}.device-disabled{opacity:.9;border-color:#566976!important}.registry-status.disabled{color:#a9bac3}.registry-status.disabled i{background:#7b8c96}.registry-application small+small{margin-top:3px}
+@media(max-width:1050px){.registry-row.device-manage-row{grid-template-columns:52px 1.25fr 1fr .65fr auto}.registry-version{display:none}}@media(max-width:720px){.registry-row.device-manage-row{grid-template-columns:48px 1fr auto}.registry-application,.registry-version{display:none}.registry-status{grid-column:2}.registry-manage{grid-column:3;grid-row:1/3}.device-action-summary{grid-template-columns:1fr}.device-action-buttons{display:grid}.device-action-buttons form,.device-btn{width:100%;text-align:center}}
+</style>{% endblock %}
+{% block body %}
+<div class="registry-page">
+  <div class="registry-head">
+    <div><h1>Devices & Sources</h1><p>Manage AssetTrack 360 devices, vehicle trackers, MQTT gateways, APIs and PLC/OPC sources.</p></div>
+    <a class="registry-add" href="{{url_for('main.connect_device')}}">+ Add Device or Source</a>
+  </div>
+
+  <section class="registry-list" aria-label="Registered devices and sources">
+  {% for item in items %}
+    {% set mobile=item.device.device_type in ('MOBILE_WEB_TRACKER','ANDROID_MOBILE_TRACKER','MOBILE_TRACKER','IOS_MOBILE_TRACKER') %}
+    {% set shown_state='ONLINE' if item.online else 'OFFLINE' %}
+    {% set detail_url=('/asset/' ~ item.asset.id ~ '/tracking') if mobile and item.asset else ('/asset/' ~ item.asset.id) if item.asset else ('/devices/' ~ item.device.id) %}
+    <article class="registry-row device-manage-row {{'device-disabled' if not item.device.active else ''}}">
+      <span class="registry-icon">{{'GPS' if mobile else 'IO'}}</span>
+      <span class="registry-identity"><b>{{item.device.device_uid}}</b><small>{{'Mobile Tracker' if mobile else item.profile.display_name}}</small></span>
+      <span class="registry-application"><small>APPLICATION</small><b>{{item.asset.name if item.asset else 'Unassigned'}}</b>{% if item.asset %}<small>Asset #{{item.asset.id}}</small>{% endif %}</span>
+      <span class="registry-status {{'disabled' if not item.device.active else shown_state|lower}}"><i></i>{{'Disabled' if not item.device.active else shown_state|title}}</span>
+      <span class="registry-version"><small>{{'APP' if mobile else 'FIRMWARE'}}</small><b>{{item.device.firmware or 'Not reported'}}</b></span>
+      <button class="registry-manage" type="button" aria-expanded="false" onclick="toggleDeviceActions(this)">Manage</button>
+      <section class="device-actions">
+        <div class="device-action-summary"><span><small>DEVICE UID</small><b>{{item.device.device_uid}}</b></span><span><small>LINKED ASSET</small><b>{{item.asset.name if item.asset else 'Unassigned'}}{% if item.asset %} · Asset #{{item.asset.id}}{% endif %}</b></span><span><small>STATE</small><b>{{'Enabled' if item.device.active else 'Disabled'}}</b></span></div>
+        <div class="device-action-buttons">
+          {% if item.asset %}<a class="device-btn" href="{{detail_url}}">{{'Open Tracking' if mobile else 'Open Asset'}}</a><a class="device-btn" href="{{url_for('main.universal_device_panel',asset_id=item.asset.id)}}">Device Studio</a><form method="post" action="{{url_for('main.unlink_asset_device',device_id=item.device.id)}}"><button class="device-btn warning" type="submit" onclick="return confirm('Unlink {{item.device.device_uid}} from {{item.asset.name}}? Asset history will be retained.')">Unlink from Asset</button></form>{% endif %}
+          <form method="post" action="{{url_for('main.toggle_device',device_id=item.device.id)}}"><button class="device-btn {{'warning' if item.device.active else 'success'}}" type="submit" onclick="return confirm('{{'Disable' if item.device.active else 'Enable'}} {{item.device.device_uid}}?')">{{'Disable Device' if item.device.active else 'Enable Device'}}</button></form>
+          {% if not item.device.active %}<span class="delete-lock">Disabled. For permanent deletion use Account → Data Management.</span>{% else %}<span class="delete-lock">Disable and unlink before permanent deletion in Data Management.</span>{% endif %}
+        </div>
+      </section>
+    </article>
+  {% else %}
+    <div class="registry-empty">No registered devices or sources.</div>
+  {% endfor %}
+  </section>
+
+  <div class="registry-footer-actions">
+    <a href="{{url_for('main.integrations')}}">Open Integration Registry</a>
+    <a href="/integrations/new">Add MQTT, API, PLC/OPC, Modbus or SQL source</a>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}<script>
+function toggleDeviceActions(button){
+ const row=button.closest('.device-manage-row');
+ if(!row)return;
+ const opening=!row.classList.contains('actions-open');
+ document.querySelectorAll('.device-manage-row.actions-open').forEach(item=>{item.classList.remove('actions-open');const b=item.querySelector('.registry-manage');if(b){b.textContent='Manage';b.setAttribute('aria-expanded','false');}});
+ if(opening){row.classList.add('actions-open');button.textContent='Close';button.setAttribute('aria-expanded','true');row.scrollIntoView({behavior:'smooth',block:'nearest'});}
+}
+</script>{% endblock %}
