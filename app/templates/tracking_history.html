@@ -21,9 +21,9 @@
   try{
     const m=L.map(canvas,{scrollWheelZoom:false});
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap'}).addTo(m);
-    const lines=segments.map(segment=>segment.map(x=>[Number(x.latitude),Number(x.longitude)]).filter(x=>Number.isFinite(x[0])&&Number.isFinite(x[1]))).filter(line=>line.length);
+    const lines=segments.map(segment=>segment.map(x=>[Number(x.latitude),Number(x.longitude)]).filter(x=>Number.isFinite(x[0])&&Number.isFinite(x[1]))).filter(line=>line.length>=3);
     const line=lines.flat();
-    lines.forEach((segment,index)=>{if(segment.length>1){L.polyline(segment,{color:'#00c8e8',weight:6,opacity:.95,lineJoin:'round'}).addTo(m);L.circleMarker(segment[0],{radius:6,color:'#9edf39',fillOpacity:1}).bindTooltip('Journey '+(index+1)+' start').addTo(m);L.circleMarker(segment[segment.length-1],{radius:6,color:'#ffad2f',fillOpacity:1}).bindTooltip('Journey '+(index+1)+' end').addTo(m);}});
+    lines.forEach((segment,index)=>{if(segment.length>=3){L.polyline(segment,{color:'#00c8e8',weight:6,opacity:.95,lineJoin:'round'}).addTo(m);L.circleMarker(segment[0],{radius:6,color:'#9edf39',fillOpacity:1}).bindTooltip('Journey '+(index+1)+' start').addTo(m);L.circleMarker(segment[segment.length-1],{radius:6,color:'#ffad2f',fillOpacity:1}).bindTooltip('Journey '+(index+1)+' end').addTo(m);}});
     zones.forEach(z=>L.circle([z.latitude,z.longitude],{radius:z.radius_m,color:z.rule==='KEEP_OUT'?'#ff5b68':'#9bd13b',fillOpacity:.12}).bindPopup(z.name+' · '+z.rule.replace('_',' ')).addTo(m));
     L.marker([last.latitude,last.longitude]).addTo(m).bindPopup(`<b>{{asset.name}}</b><br>${Math.round(last.speed||0)} km/h · Latest position`).openPopup();
     line.length>1?m.fitBounds(line,{padding:[35,35],maxZoom:17}):m.setView([last.latitude,last.longitude],15);

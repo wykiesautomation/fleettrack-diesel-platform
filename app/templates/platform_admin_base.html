@@ -40,7 +40,7 @@
     <a class="{{ 'active' if ep == 'admin.devices' }}" href="{{ url_for('admin.devices') }}">Devices</a>
     <a class="{{ 'active' if ep == 'admin.support' }}" href="{{ url_for('admin.support') }}">Support</a>
     <a class="{{ 'active' if ep == 'admin.audit_log' }}" href="{{ url_for('admin.audit_log') }}">Audit Log</a>
-    <a class="{{ 'active' if ep == 'admin.settings' }}" href="{{ url_for('admin.settings') }}">Platform Settings</a>
+    <a class="{{ 'active' if ep == 'admin.settings' }}" href="{{ url_for('admin.settings') }}">Platform Settings</a><a class="{{ 'active' if ep == 'admin.data_management' }}" href="{{ url_for('admin.data_management') }}">Data Management</a>
   </aside>
   <section class="admin-main">
     {% block admin %}{% endblock %}

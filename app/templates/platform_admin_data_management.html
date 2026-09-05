@@ -1,0 +1,5 @@
+{% extends "platform_admin_base.html" %}{% block admin %}
+<div class="admin-hero"><div><h1>Data Management</h1><p>The only Platform Administration page for permanent customer deletion.</p></div></div>
+<div class="admin-panel"><p><b>Protected workflow:</b> routine user, asset, device and subscription work remains on normal pages. Permanent customer deletion is isolated here and requires the exact customer name plus DELETE.</p></div>
+{% for x in rows %}<div class="admin-panel"><h2>{{x.customer.name}}</h2><p>{{x.users}} users · {{x.assets}} assets · {{x.devices}} devices</p><form method="post" action="{{url_for('admin.delete_customer',customer_id=x.customer.id)}}" class="admin-tools" onsubmit="return confirm('Permanently delete {{x.customer.name|e}} and all tenant data? This cannot be undone.')"><input class="admin-control" name="confirm_name" placeholder="Exact customer name"><input class="admin-control" name="confirm_word" placeholder="DELETE"><button class="admin-btn admin-danger">Delete Customer Permanently</button></form></div>{% else %}<div class="admin-panel">No customer workspaces.</div>{% endfor %}
+{% endblock %}
