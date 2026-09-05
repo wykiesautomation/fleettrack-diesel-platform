@@ -122,20 +122,7 @@ def trends_limits_entry():
 @bp.route('/devices/<int:device_id>/trends-limits',methods=['GET','POST'])
 @login_required
 def trends_limits(device_id):
-    dev=Device.query.filter_by(id=device_id,customer_id=current_user.customer_id).first_or_404()
-    all_devices=Device.query.filter_by(customer_id=current_user.customer_id).order_by(Device.device_uid).all()
-    device_choices=[]
-    current_time=now()
-    for candidate in all_devices:
-        candidate_assignments=(DeviceChannelAssignment.query.filter_by(device_id=candidate.id,enabled=True)
-            .filter(DeviceChannelAssignment.signal_id.isnot(None)).order_by(DeviceChannelAssignment.id).all())
-        first_signal_id=next((row.signal_id for row in candidate_assignments if row.signal_id),None)
-        candidate_profile=profile_for_device(candidate) or {}
-        seen=candidate.last_seen.replace(tzinfo=candidate.last_seen.tzinfo or timezone.utc) if candidate.last_seen else None
-        age_seconds=(current_time-seen).total_seconds() if seen else None
-        online=bool(candidate.active and age_seconds is not None and age_seconds<=120)
-        device_choices.append({'device':candidate,'profile':candidate_profile,'first_signal_id':first_signal_id,'online':online,'linked_asset':candidate.asset})
-    assignments=DeviceChannelAssignment.query.filter_by(device_id=dev.id,enabled=True).filter(DeviceChannelAssignment.signal_id.isnot(None)).order_by(DeviceChannelAssignment.id).all()
+    dev=Device.query.filter_by(id=device_id,customer_id=current_user.customer_id).first_or_404();assignments=DeviceChannelAssignment.query.filter_by(device_id=dev.id,enabled=True).filter(DeviceChannelAssignment.signal_id.isnot(None)).order_by(DeviceChannelAssignment.id).all()
     signals=[db.session.get(SignalDefinition,a.signal_id) for a in assignments];signals=[x for x in signals if x]
     requested=request.values.get('signal_id',type=int);index=next((i for i,x in enumerate(signals) if x.id==requested),0);signal=signals[index] if signals else None
     if request.method=='POST' and signal:
@@ -155,7 +142,7 @@ def trends_limits(device_id):
         signal.config_json=cfg;db.session.commit();flash(f'{signal.label} saved.','ok')
         if request.form.get('next')=='1' and index<len(signals)-1:return redirect(url_for('device_api.trends_limits',device_id=dev.id,signal_id=signals[index+1].id))
         return redirect(url_for('device_api.trends_limits',device_id=dev.id,signal_id=signal.id))
-    return render_template('trends_limits.html',device=dev,signals=signals,signal=signal,index=index,device_choices=device_choices,selected_profile=profile_for_device(dev) or {})
+    return render_template('trends_limits.html',device=dev,signals=signals,signal=signal,index=index)
 
 @bp.post('/api/v2/telemetry')
 def telemetry():

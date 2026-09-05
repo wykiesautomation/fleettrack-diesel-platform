@@ -2428,17 +2428,10 @@ def devices():
 @bp.post('/devices/<int:device_id>/delete')
 @login_required
 def delete_device(device_id):
-    if current_user.role not in ('customer_admin','platform_admin'):abort(403)
     record=Device.query.filter_by(id=device_id,customer_id=tenant_id()).first_or_404()
     if record.active:
         flash('Disable the device before permanently deleting it.','error')
         return redirect(url_for('main.devices'))
-    if record.asset_id:
-        flash('Unlink the device before permanently deleting it.','error')
-        return redirect(url_for('main.test_data_cleanup'))
-    if request.form.get('confirm_name','').strip()!=str(record.device_uid or '').strip() or request.form.get('confirm_word','').strip().upper()!='DELETE':
-        flash('Exact device UID and DELETE are required.','error')
-        return redirect(url_for('main.test_data_cleanup'))
 
     customer_id=record.customer_id
     expected_uid=str(record.device_uid or '').strip()
