@@ -1,0 +1,6 @@
+Add these two lines after the existing blueprint registrations in app/__init__.py:
+
+from .operations_fixes import ops_bp
+app.register_blueprint(ops_bp)
+
+For the Registry mapping KPI, import mapping_total from app.operations_fixes and use mapping_total(tenant_id()) instead of counting only IntegrationSignalMapping.

@@ -1,0 +1,47 @@
+{% extends 'base.html' %}
+{% block title %}Trends & Limits | AssetTrack 360{% endblock %}
+{% block head_extra %}<link rel="stylesheet" href="{{url_for('static',filename='trends_limits_rev28_exact.css')}}">{% endblock %}
+{% block body %}
+<div class="tl-head"><div><h1>Trends & Limits</h1><p class="muted">Configure one saved point at a time, save it, then move to the next point.</p></div><span class="assigned-only">● Assigned points only</span></div>
+<div class="tl-shell">
+  <section class="tl-panel">
+    <div class="tl-context">
+      <div class="tl-field"><label>Selected Device</label><input value="No registered device" readonly></div>
+      <div class="tl-field"><label>Configure Point</label><select class="pin-select" disabled><option>No assigned signals</option></select></div>
+    </div>
+    <div class="progress-meta"><b>Point 0 of 0</b><span class="muted">0 saved · waiting for Signals & Inputs assignment</span></div>
+    <div class="progress-line"><div class="progress-fill" style="width:0%"></div></div>
+    <div class="pin-chips"><span class="pin-chip">No point</span><span class="pin-chip">No function</span><span class="pin-chip">Waiting for telemetry</span><span class="pin-chip saved-chip">Safe lockout ✓</span></div>
+  </section>
+
+  <section class="tl-panel">
+    <div class="signal-head"><div><h2>No assigned signal</h2><span class="muted">Point configuration</span></div><span class="live-state">● Waiting</span></div>
+    <div class="dirty-note"><b>Safe lockout active</b><span> Assign and save a real point in Signals & Inputs before editing settings.</span></div>
+    <div class="tabs">
+      <button type="button" class="tab active" data-tab="scaling">Values & Scaling</button>
+      <button type="button" class="tab" data-tab="limits">Limits & Alarms</button>
+      <button type="button" class="tab" data-tab="history">Trend & History</button>
+      <button type="button" class="tab" data-tab="preview">Live Preview</button>
+    </div>
+
+    <div class="tab-pane active" id="tab-scaling"><div class="tl-grid">
+      {% for label in ['Raw Input Minimum','Raw Input Maximum','Engineering Minimum','Engineering Maximum','Engineering Unit','Calibration Offset','Calibration Multiplier','Decimal Places'] %}<div class="tl-box"><label>{{label}}</label><input value="Waiting for assigned point" disabled></div>{% endfor %}
+    </div></div>
+
+    <div class="tab-pane" id="tab-limits"><div class="tl-grid">
+      {% for label in ['Warning Low','Critical Low','Warning High','Critical High','Alarm Delay','Hysteresis / Deadband','Email Notification','Alarm State'] %}<div class="tl-box"><label>{{label}}</label><input value="Waiting for assigned point" disabled></div>{% endfor %}
+    </div></div>
+
+    <div class="tab-pane" id="tab-history"><div class="tl-grid">
+      {% for label in ['Trend Enabled','Sample Interval','Upload Interval','History Retention'] %}<div class="tl-box"><label>{{label}}</label><input value="Waiting for assigned point" disabled></div>{% endfor %}
+    </div></div>
+
+    <div class="tab-pane" id="tab-preview"><div class="preview-grid">
+      {% for label in ['Current','Minimum','Maximum','Quality'] %}<div class="preview-card"><span>{{label}}</span><b>Waiting</b></div>{% endfor %}
+    </div><div class="chart"><div class="empty-chart">Waiting for live telemetry</div></div></div>
+
+    <div class="savebar"><div class="save-state"><b>Safe lockout active</b><span class="muted">Settings remain locked until a real asset, device and point are assigned.</span></div><div class="save-actions"><a href="{{url_for('device_api.signals_inputs_entry')}}">Open Signals & Inputs</a><button disabled>Save Point</button><button class="primary" disabled>Save & Next Point →</button></div></div>
+  </section>
+</div>
+{% endblock %}
+{% block scripts %}<script>const tabs=document.querySelectorAll('.tab'),panes=document.querySelectorAll('.tab-pane');tabs.forEach(t=>t.onclick=()=>{tabs.forEach(x=>x.classList.remove('active'));panes.forEach(x=>x.classList.remove('active'));t.classList.add('active');document.getElementById('tab-'+t.dataset.tab).classList.add('active')});</script>{% endblock %}

@@ -1,0 +1,22 @@
+{
+  "release": "AssetTrack 360 Mobile GPS Batch Contract Fix",
+  "baseline": "uploaded live GitHub main.zip.txt",
+  "created_utc": "2026-08-31T20:16:59.670585+00:00",
+  "files": [
+    {
+      "path": "app/routes.py",
+      "size": 327208,
+      "sha256": "58ac4ed19a27a4d249a37bebbd41290ad23016edab421cf47c01a22b3584b6b8"
+    },
+    {
+      "path": "tests/test_mobile_gps_batch_contract_fix.py",
+      "size": 1163,
+      "sha256": "122ae37635e9a78fbf6b5123ceda2748ce8f02c279e92bbed9566fcc02d44e33"
+    },
+    {
+      "path": "BUILD_MOBILE_GPS_BATCH_CONTRACT_FIX.md",
+      "size": 690,
+      "sha256": "ce8350ecd6cdf3968eb326bd58218aa8014063e4d0d76a8a08a59d23e30d54eb"
+    }
+  ]
+}

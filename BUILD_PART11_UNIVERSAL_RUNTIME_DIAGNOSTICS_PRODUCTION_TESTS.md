@@ -1,0 +1,2 @@
+# Part 11: Universal Runtime Diagnostics & Production Tests
+Cumulative on Parts 1-10. Adds one tenant-scoped diagnostics cockpit for OPC UA, OPC Classic, Modbus TCP, Modbus RTU, SQL/ODBC, MQTT, REST and webhook connectors. It evaluates gateway heartbeat, connector state, endpoint configuration, mappings, freshness, quality, errors and read-only enforcement. Tests create audit evidence and never execute process writes, output commands, PLC writes, SQL writes or alarm acknowledgements.

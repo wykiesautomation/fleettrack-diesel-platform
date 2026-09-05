@@ -1,0 +1,93 @@
+{% extends 'base.html' %}
+{% block title %}Connect Device | AssetTrack 360{% endblock %}
+{% block head_extra %}
+<style>
+.wrap{max-width:1320px;margin:auto}.steps{display:flex;gap:8px;margin:18px 0}.step{flex:1;padding:11px;border-radius:10px;background:#071b2a;color:var(--muted)}.step.on{border:1px solid var(--cyan);color:white}.panel{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:24px}.section-head{display:flex;justify-content:space-between;gap:12px;align-items:end;margin:24px 0 12px}.section-head h2{margin:0}.section-head small{color:var(--muted)}.types{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}.type{position:relative;background:#071b2a;border:1px solid #28516a;border-radius:16px;padding:17px;cursor:pointer;min-height:190px;display:flex;flex-direction:column}.type:hover{border-color:#43809c}.type.selected{border:2px solid var(--cyan);background:#0c3047;box-shadow:0 0 0 3px rgba(19,200,232,.08)}.type input{position:absolute;opacity:0;pointer-events:none}.check{position:absolute;right:12px;top:12px;width:23px;height:23px;border:2px solid #698493;border-radius:50%;display:grid;place-items:center}.type.selected .check{background:var(--cyan);border-color:var(--cyan);color:#00151d}.device-icon{font-size:32px;margin-bottom:10px}.type b{font-size:17px;padding-right:24px}.type small{display:block;color:#b8d4e0;line-height:1.45;margin:7px 0 12px}.badges{display:flex;gap:5px;flex-wrap:wrap;margin-top:auto}.badge{font-size:8px;font-weight:900;border:1px solid #31566c;background:#102f45;color:#d5edf6;border-radius:999px;padding:5px 7px}.badge.rec{color:var(--lime);border-color:#47752b;background:#14391e}.filterbar{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:12px}.filter{border:1px solid #31566c;background:#092334;color:#cde5ef;padding:7px 10px;border-radius:999px;font-size:9px;font-weight:850;cursor:pointer}.filter.active{background:var(--cyan);border-color:var(--cyan);color:#00151d}.solutions{display:grid;grid-template-columns:repeat(3,1fr);gap:11px}.solution{position:relative;background:#071b2a;border:1px solid #244b61;border-radius:15px;padding:15px;cursor:pointer;min-height:158px;display:flex;flex-direction:column}.solution:hover{border-color:#3b7d9c}.solution.selected{border:2px solid var(--lime);box-shadow:0 0 0 3px rgba(165,220,56,.07)}.solution.unsupported{opacity:.38;cursor:not-allowed}.solution input{position:absolute;opacity:0;pointer-events:none}.solution b{font-size:15px}.solution p{font-size:11px;color:#b9d3de;line-height:1.45;margin:7px 0 10px}.compat{font-size:8px;font-weight:900;color:var(--lime);margin-top:auto}.unsupported .compat{color:#ff6b78}.primary-row{margin-top:12px;display:grid;grid-template-columns:1fr 1fr;gap:12px}.field{margin-top:16px}.field label{display:block;color:var(--muted);font-size:11px;margin-bottom:6px}.field select,.field input{width:100%;padding:12px;background:#071724;border:1px solid #31566c;border-radius:9px;color:white;box-sizing:border-box}.new-fields{display:grid;grid-template-columns:1fr 1fr;gap:12px}.actions{display:flex;gap:10px;margin-top:22px;align-items:center;justify-content:flex-end;padding-top:18px;border-top:1px solid #244b61}.actions .summary{margin-right:auto}.actions .claim-primary{appearance:none;min-height:44px;padding:11px 18px!important;border:1px solid var(--cyan)!important;border-radius:10px!important;background:var(--cyan)!important;color:#031923!important;font:900 13px Segoe UI,Arial,sans-serif!important;cursor:pointer;box-shadow:0 8px 20px rgba(0,194,223,.18)}.actions .claim-primary:hover{filter:brightness(1.08);transform:translateY(-1px)}.actions .claim-cancel{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:10px 16px!important;border:1px solid #3b6c84!important;border-radius:10px!important;background:#12364d!important;color:#e5f5fb!important;font:800 13px Segoe UI,Arial,sans-serif!important;text-decoration:none!important}.actions .claim-cancel:hover{border-color:#67a7c2!important;background:#17445f!important}.summary{margin-right:auto;color:var(--muted);font-size:11px}.summary b{color:white}.hint{background:#082236;border-left:4px solid var(--cyan);padding:12px;border-radius:8px;margin-top:14px;color:#b9d3de}.capability-panel{margin-top:20px;background:#082236;border:1px solid #256078;border-radius:14px;padding:16px}.capability-panel h3{margin:0 0 7px}.capability-list{display:flex;gap:7px;flex-wrap:wrap;margin-top:10px}.capability-chip{border:1px solid #35728d;background:#0b3045;border-radius:999px;padding:6px 9px;font-size:9px;font-weight:850;color:#d8f2fa}.hidden{display:none!important}@media(max-width:1050px){.types{grid-template-columns:1fr 1fr}.solutions{grid-template-columns:1fr 1fr}}@media(max-width:700px){.types,.solutions,.new-fields,.primary-row{grid-template-columns:1fr}.steps{display:grid;grid-template-columns:1fr 1fr}.actions{flex-wrap:wrap}.summary{width:100%}}
+@media(max-width:1200px){.types{grid-template-columns:repeat(3,minmax(0,1fr))}}@media(max-width:760px){.types{grid-template-columns:1fr}}</style>
+{% endblock %}
+{% block body %}
+<div class="wrap">
+ <span class="eyebrow">DEVICE ONBOARDING CENTRE</span>
+ <h1>Connect a Device</h1>
+ <p>Choose the physical phone or board first, then select what the connected device must monitor or control.</p>
+ <div class="steps"><div class="step on">1 · Physical Device</div><div class="step on">2 · Solution Profiles</div><div class="step">3 · Configure & Connect</div><div class="step">4 · Verify</div></div>
+ <form method="post" class="panel" id="connect-form">
+  <div class="section-head"><div><h2>What would you like to connect?</h2><small>Choose a supported mobile tracker or physical board</small></div></div>
+  <div class="types" id="device-grid">
+   <label class="type selected" data-device="ANDROID_PHONE" data-profile="" data-code="ANDROID_PHONE"><input type="radio" name="device_kind" value="ANDROID_PHONE" checked><span class="check">✓</span><span class="device-icon">📱</span><b>Android Phone</b><small>Use a phone as a mobile GPS tracker with QR registration and no external board.</small><span class="badges"><span class="badge">GPS Tracking</span><span class="badge">QR Setup</span><span class="badge">Mobile Data</span></span></label>
+   {% set seen_profiles=namespace(codes=[]) %}
+   {% for profile in device_profiles %}
+   {% if profile.code not in seen_profiles.codes %}{% set seen_profiles.codes=seen_profiles.codes+[profile.code] %}
+   {% set is_d=profile.code=='AT360_ESP32D_EXPANDED' %}{% set is_w=profile.code=='AT360_ESP32_WROOM32' %}{% set is_sim808=profile.code=='AT360_SIM808_TRACKER_2AI_2DO' %}{% set is_tsim=profile.code=='AT360_LILYGO_T_SIM7000G' %}
+   <label class="type" data-device="HARDWARE_PROFILE" data-profile="{{profile.code}}" data-code="{{profile.code}}" data-capabilities='{{ profile.get("capabilities", [])|tojson|forceescape }}'><input type="radio" name="device_kind" value="HARDWARE_PROFILE"><span class="check"></span><span class="device-icon">{{'▦' if is_d else '▣' if is_w else '⌖' if is_sim808 else '◉' if is_tsim else '◫'}}</span><b>{{'ESP32-D 38-pin' if is_d else 'ESP32-WROOM-32' if is_w else 'SIM808 SAMD21' if is_sim808 else 'LILYGO T-SIM7000G' if is_tsim else profile.display_name}}</b><small>{{'Expanded Wi-Fi remote I/O for sensors, counters and safe outputs.' if is_d else 'Standard Wi-Fi remote I/O for compact monitoring and control.' if is_w else 'GPS and GSM/GPRS board with analog monitoring and independent telemetry.' if is_sim808 else 'LTE Cat-M1 / NB-IoT / GPRS tracker with GNSS, battery, solar and optional microSD.' if is_tsim else profile.get('profile_notice','Supported AssetTrack 360 hardware profile.')}}</small><span class="badges">{% if is_d %}<span class="badge rec">Recommended</span><span class="badge">4 Analog</span><span class="badge">4 Digital</span><span class="badge">4 Outputs</span>{% elif is_w %}<span class="badge">Analog</span><span class="badge">Digital</span><span class="badge">Output</span><span class="badge">Wi-Fi</span>{% elif is_sim808 %}<span class="badge">GPS/GNSS</span><span class="badge">GSM/GPRS</span><span class="badge">2 Analog</span><span class="badge">2 Outputs</span>{% elif is_tsim %}<span class="badge">LTE / NB-IoT</span><span class="badge">GNSS</span><span class="badge">Battery / Solar</span><span class="badge">Optional microSD</span>{% endif %}</span></label>
+   {% endif %}
+   {% endfor %}
+  </div>
+  <input type="hidden" name="profile_code" id="profile_code">
+
+  <section id="capability-section" class="hidden">
+   <div class="capability-panel">
+    <h3 id="capability-title">Verified board functions</h3>
+    <div style="color:#a9c9d6;font-size:12px">All supported functions remain available. After the board is claimed, configure the required GPS, communications, inputs, sensors and safe outputs in the Device Panel.</div>
+    <div class="capability-list" id="capability-list"></div>
+   </div>
+  </section>
+  <h2>Choose the asset</h2>
+  <label><input type="radio" name="asset_mode" value="existing" {% if assets %}checked{% endif %}> Connect existing asset</label>
+  <div class="field"><label>EXISTING ASSET</label><select name="asset_id" id="existing_asset"><option value="">Select asset...</option>{% for asset in assets %}<option value="{{asset.id}}" data-type="{{asset.asset_type}}" {% if preselected_asset and preselected_asset.id == asset.id %}selected{% endif %}>{{asset.name}} · {{asset.asset_type}}</option>{% endfor %}</select></div>
+  <div id="new-asset-option"><p><label><input type="radio" name="asset_mode" value="new" {% if not assets %}checked{% endif %}> Create new asset</label></p>
+  <div class="new-fields"><div class="field"><label>NEW ASSET NAME</label><input name="asset_name" id="asset_name" placeholder="Truck 01 or Tank 01"></div><div class="field"><label>ASSET TYPE</label><select name="new_asset_type" id="new_asset_type"><option value="GENERIC">General asset</option><option value="TANK">Tank</option><option value="TRACKER">Vehicle / tracking asset</option><option value="VIBRATION">Machine / condition asset</option></select></div><div class="field"><label>SITE (OPTIONAL)</label><select name="site_id" id="site_id"><option value="">My Assets (default)</option>{% for site in sites %}<option value="{{site.id}}">{{site.name}}</option>{% endfor %}</select></div></div>
+  <div class="hint">Leave Site unchanged to organise this asset automatically under <b>My Assets</b>. Select a site only when location grouping is needed.</div></div>
+  <div class="actions"><div class="summary" id="summary">Selected: <b>Android Phone</b> · Select an asset</div><button class="claim-primary" type="submit" id="submit-button">Create Android Registration Code</button><a class="claim-cancel" href="{{ url_for('main.devices') }}">Cancel</a></div>
+ </form>
+</div>
+<script>
+(function(){
+ const cards=[...document.querySelectorAll('.type')];
+ const profileCode=document.getElementById('profile_code');
+ const capabilitySection=document.getElementById('capability-section');
+ const capabilityList=document.getElementById('capability-list');
+ const submit=document.getElementById('submit-button');
+ const summary=document.getElementById('summary');
+ const modes=document.querySelectorAll('input[name="asset_mode"]');
+ const existing=document.getElementById('existing_asset');
+ const assetName=document.getElementById('asset_name');
+ const newAssetType=document.getElementById('new_asset_type');
+ const site=document.getElementById('site_id');
+ const newAssetOption=document.getElementById('new-asset-option');
+ function selectedCard(){return document.querySelector('.type.selected')}
+ function capabilities(card){try{return JSON.parse(card?.dataset.capabilities||'[]')}catch(e){return []}}
+ function updateSummary(){
+   const card=selectedCard();
+   const asset=existing.options[existing.selectedIndex]?.text||'Select an asset';
+   summary.innerHTML=`Selected: <b>${card.querySelector('b').textContent}</b> · ${asset}`;
+ }
+ function updateDevice(){
+   const card=selectedCard(),android=card.dataset.device==='ANDROID_PHONE';
+   profileCode.value=card.dataset.profile||'';
+   capabilitySection.classList.toggle('hidden',android);
+   capabilityList.innerHTML='';
+   capabilities(card).forEach(value=>{const chip=document.createElement('span');chip.className='capability-chip';chip.textContent=String(value).replaceAll('_',' ');capabilityList.appendChild(chip)});
+   submit.textContent=android?'Create Android Registration Code':'Generate 10-Minute Claim Code';
+   [...existing.options].forEach(option=>{if(!option.value)return;const allowed=!android||option.dataset.type==='TRACKER';option.hidden=!allowed;option.disabled=!allowed;if(!allowed&&option.selected)existing.value=''});
+   if(android){newAssetType.value='TRACKER';newAssetType.disabled=true}else newAssetType.disabled=false;
+   updateSummary();
+ }
+ cards.forEach(card=>card.addEventListener('click',()=>{
+   cards.forEach(x=>{x.classList.remove('selected');x.querySelector('.check').textContent=''});
+   card.classList.add('selected');card.querySelector('.check').textContent='✓';card.querySelector('input').checked=true;updateDevice();
+ }));
+ function assetMode(){
+   const creating=document.querySelector('input[name="asset_mode"]:checked')?.value!=='existing';
+   existing.disabled=creating;existing.required=!creating;assetName.disabled=!creating;site.disabled=!creating;assetName.required=creating;newAssetOption.style.display=creating?'block':'none';
+   if(newAssetType)newAssetType.disabled=!creating||selectedCard()?.dataset.device==='ANDROID_PHONE';updateSummary();
+ }
+ modes.forEach(x=>x.addEventListener('change',assetMode));
+ assetName.addEventListener('input',()=>{if(assetName.value.trim()){document.querySelector('input[name="asset_mode"][value="new"]').checked=true;assetMode()}});
+ existing.addEventListener('change',()=>{if(existing.value){document.querySelector('input[name="asset_mode"][value="existing"]').checked=true;assetMode()}updateSummary()});
+ document.getElementById('connect-form').addEventListener('submit',e=>{if(!selectedCard()){e.preventDefault();alert('Select a physical device first.')}});
+ if(existing.value){document.querySelector('input[name="asset_mode"][value="existing"]').checked=true}
+ updateDevice();assetMode();
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,38 @@
+{
+  "release": "AssetTrack 360 Quick Calibration Visibility Contrast Fix",
+  "baseline": "uploaded live main.zip.txt",
+  "created_utc": "2026-09-01T07:11:02.443670+00:00",
+  "tests": "11 passed",
+  "files": [
+    {
+      "path": "app/templates/device_panel.html",
+      "size": 20575,
+      "sha256": "47037a50479aa3d3dcf794f6f53eac3300dbdffd59bd07bc1994847900e6509f"
+    },
+    {
+      "path": "app/templates/quick_calibration.html",
+      "size": 9269,
+      "sha256": "4feda4b40992f462ae5c00d13e01498d2be0869bdb7fbb0915f4b9fc60aad87f"
+    },
+    {
+      "path": "app/templates/base.html",
+      "size": 4360,
+      "sha256": "c14be5d33284b3f6808ec52196bc020104eb5ea93d3d2c0dffffbb9ca3330a58"
+    },
+    {
+      "path": "app/static/device_action_contrast.css",
+      "size": 1075,
+      "sha256": "0c7e49128cd9c2b4b21244381e3d2663a058cddaae2a6fea771153f2ef9e9bc1"
+    },
+    {
+      "path": "tests/test_quick_calibration_visibility_contrast.py",
+      "size": 1116,
+      "sha256": "d0d9005f1587a648d7df659314719560c49aa316dab1403a1241885d25ed5131"
+    },
+    {
+      "path": "BUILD_QUICK_CALIBRATION_VISIBILITY_CONTRAST_FIX.md",
+      "size": 456,
+      "sha256": "c9a21cb04c8acdcf532531cc95175420eb3774e7f1de711b68fbc0d353f97962"
+    }
+  ]
+}

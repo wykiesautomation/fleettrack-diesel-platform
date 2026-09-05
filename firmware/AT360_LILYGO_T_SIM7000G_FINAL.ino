@@ -1,0 +1,53 @@
+/* AssetTrack 360 - LILYGO T-SIM7000G revision-safe production baseline
+   Profile: AT360_LILYGO_T_SIM7000G
+   Customer GPIO is locked until the physical PCB revision is verified.
+   microSD is optional and disabled by default. Simulation never drives modem power.
+*/
+#define TINY_GSM_MODEM_SIM7000
+#include <WiFi.h>
+#include <WebServer.h>
+#include <DNSServer.h>
+#include <Preferences.h>
+#include <HTTPClient.h>
+#include <WiFiClientSecure.h>
+#include <TinyGsmClient.h>
+#include <ArduinoJson.h>
+#include <SPI.h>
+#include <SD.h>
+
+static const char *FW="1.0.0-tsim7000g-revision-safe";
+static const char *PROFILE_CODE="AT360_LILYGO_T_SIM7000G";
+static const char *BOARD_FAMILY="LILYGO T-SIM7000G";
+static const char *CLAIM_URL="https://assettrack360.wykiesautomation.co.za/api/v1/device/claim";
+static const char *INGEST_URL="https://assettrack360.wykiesautomation.co.za/api/v1/ingest";
+static const uint8_t MODEM_TX=27,MODEM_RX=26,MODEM_PWRKEY=4,MODEM_DTR=25;
+static const uint8_t BAT_ADC=35,SOLAR_ADC=36,LED_PIN=12;
+static const uint8_t SD_MISO=2,SD_MOSI=15,SD_CLK=14,SD_CS=13;
+static const IPAddress AP_IP(192,168,4,1),AP_MASK(255,255,255,0);
+HardwareSerial ModemSerial(1); TinyGsm modem(ModemSerial); WebServer web(80); DNSServer dns; Preferences prefs;
+String ssid,wifiPw,apn,apnUser,apnPass,deviceUid,deviceToken,adminHash,sessionId;
+bool simulation=false,sdEnabled=false,trackingEnabled=true,firstLogin=true,modemReady=false,networkReady=false;
+uint32_t sequenceNo=0,lastUpload=0,uploadSeconds=60; const size_t QUEUE_LIMIT=250;
+struct QueuePoint{String json;}; QueuePoint queuePoints[QUEUE_LIMIT]; size_t queueCount=0;
+String macId(){String x=WiFi.macAddress();x.replace(":","");return x;}
+String esc(String v){v.replace("\\","\\\\");v.replace("\"","\\\"");return v;}
+String html(String title,String body){return "<!doctype html><meta name='viewport' content='width=device-width,initial-scale=1'><style>body{font-family:Arial;background:#061522;color:#fff;margin:0}.w{max-width:850px;margin:auto;padding:20px}.c{background:#0d2a42;border:1px solid #28536b;border-radius:14px;padding:16px;margin:12px 0}input,select,button{width:100%;padding:11px;margin:5px 0;box-sizing:border-box;border-radius:8px}button{background:#19c5e3;font-weight:bold}.ok{color:#a9ed39}.warn{color:#ffb84c}</style><div class='w'><h1>AssetTrack 360</h1><h2>"+title+"</h2>"+body+"</div>";}
+void save(){prefs.begin("at360",false);prefs.putString("ssid",ssid);prefs.putString("wpw",wifiPw);prefs.putString("apn",apn);prefs.putString("apu",apnUser);prefs.putString("app",apnPass);prefs.putString("uid",deviceUid);prefs.putString("tok",deviceToken);prefs.putString("ah",adminHash);prefs.putBool("first",firstLogin);prefs.putBool("sd",sdEnabled);prefs.putBool("track",trackingEnabled);prefs.putUInt("seq",sequenceNo);prefs.putUInt("up",uploadSeconds);prefs.end();}
+void load(){prefs.begin("at360",true);ssid=prefs.getString("ssid","");wifiPw=prefs.getString("wpw","");apn=prefs.getString("apn","");apnUser=prefs.getString("apu","");apnPass=prefs.getString("app","");deviceUid=prefs.getString("uid","AT360-TSIM7000G-"+macId());deviceToken=prefs.getString("tok","");adminHash=prefs.getString("ah","");firstLogin=prefs.getBool("first",true);sdEnabled=prefs.getBool("sd",false);trackingEnabled=prefs.getBool("track",true);sequenceNo=prefs.getUInt("seq",0);uploadSeconds=max(30UL,prefs.getUInt("up",60));prefs.end();}
+bool auth(){return sessionId.length()&&web.header("Cookie").indexOf("AT360SESSION="+sessionId)>=0;}
+float adcV(uint8_t pin){return analogRead(pin)/4095.0f*3.30f*2.0f;}
+int percentFromBattery(float v){return constrain((int)((v-3.20f)/1.0f*100.0f),0,100);}
+String quality(){return simulation?"SIMULATED":"GOOD";}
+void physicalModemSafe(){digitalWrite(MODEM_DTR,HIGH);}
+bool initSD(){if(!sdEnabled)return false;SPI.begin(SD_CLK,SD_MISO,SD_MOSI,SD_CS);return SD.begin(SD_CS);}
+void queueAdd(const String &payload){if(queueCount>=QUEUE_LIMIT){for(size_t i=1;i<queueCount;i++)queuePoints[i-1]=queuePoints[i];queueCount--;}queuePoints[queueCount++].json=payload;}
+bool connectWifi(){if(!ssid.length())return false;WiFi.begin(ssid.c_str(),wifiPw.c_str());uint32_t t=millis();while(WiFi.status()!=WL_CONNECTED&&millis()-t<15000)delay(100);return WiFi.status()==WL_CONNECTED;}
+bool connectCellular(){if(simulation)return false;modemReady=modem.testAT(3000);if(!modemReady)return false;networkReady=modem.waitForNetwork(30000L);if(!networkReady)return false;return modem.gprsConnect(apn.c_str(),apnUser.c_str(),apnPass.c_str());}
+String telemetry(){StaticJsonDocument<1536>d;d["device_id"]=deviceUid;d["sequence"]="tsim-"+String(++sequenceNo);d["firmware"]=FW;JsonArray m=d.createNestedArray("measurements");auto add=[&](const char*k,float v){JsonObject x=m.createNestedObject();x["point"]=k;x["value"]=v;x["quality"]=quality();};float bv=simulation?3.85f:adcV(BAT_ADC),sv=simulation?5.2f:adcV(SOLAR_ADC);add("battery_v",bv);add("battery_percent",percentFromBattery(bv));add("solar_v",sv);add("charging_status",sv>4.2f?1:0);add("wifi_rssi",WiFi.status()==WL_CONNECTED?WiFi.RSSI():-100);add("cellular_signal",simulation?18:(modemReady?modem.getSignalQuality():0));add("network_registered",simulation?1:(networkReady?1:0));add("queue_depth",queueCount);add("sd_status",sdEnabled&&SD.cardType()!=CARD_NONE?1:0);add("simulation_mode",simulation?1:0);if(trackingEnabled&&!simulation&&modemReady){float lat=0,lon=0,speed=0,alt=0,acc=0;int vsat=0,usat=0;float hdop=0;int y=0,mo=0,day=0,h=0,mi=0,se=0;if(modem.getGPS(&lat,&lon,&speed,&alt,&vsat,&usat,&acc,&y,&mo,&day,&h,&mi,&se)){add("gps_fix",1);add("speed_kmh",max(0.0f,speed));add("satellites",vsat);JsonObject l=d.createNestedObject("location");l["latitude"]=lat;l["longitude"]=lon;l["speed_kmh"]=max(0.0f,speed);l["accuracy_m"]=50;l["accuracy_source"]="ESTIMATED";}}else add("gps_fix",0);String out;serializeJson(d,out);save();return out;}
+bool postPayload(const String &payload){if(!deviceToken.length())return false;if(WiFi.status()==WL_CONNECTED){WiFiClientSecure c;c.setInsecure();HTTPClient h;if(!h.begin(c,INGEST_URL))return false;h.addHeader("Content-Type","application/json");h.addHeader("Authorization","Bearer "+deviceToken);int code=h.POST(payload);h.end();return code>=200&&code<300;}return false;}
+void flushQueue(){size_t done=0;while(done<queueCount&&postPayload(queuePoints[done].json))done++;if(done){for(size_t i=done;i<queueCount;i++)queuePoints[i-done]=queuePoints[i];queueCount-=done;}}
+void sendNow(){String p=telemetry();if(!postPayload(p))queueAdd(p);else flushQueue();}
+String statusPage(){String b="<div class='c'><b>Profile:</b> "+String(PROFILE_CODE)+"<br><b>Firmware:</b> "+FW+"<br><b>Revision:</b> UNVERIFIED<br><b>Device UID:</b> "+deviceUid+"<br><b>Wi-Fi:</b> "+String(WiFi.status()==WL_CONNECTED?"ONLINE":"OFFLINE")+"<br><b>Cellular:</b> "+String(networkReady?"REGISTERED":"NOT REGISTERED")+"<br><b>microSD:</b> "+String(sdEnabled?"ENABLED":"DISABLED")+"<br><b>Queue:</b> "+String(queueCount)+"</div>";b+="<div class='c'><h3>Wi-Fi & Cellular Setup</h3><form method='post' action='/save'><input name='ssid' placeholder='Wi-Fi SSID'><input type='password' name='wpw' placeholder='Wi-Fi password'><input name='apn' placeholder='Cellular APN'><input name='apu' placeholder='APN user'><input type='password' name='app' placeholder='APN password'><label><input type='checkbox' name='sd'> Enable optional microSD</label><button>Save and connect</button></form></div><div class='c'><h3>Register Device</h3><form method='post' action='/claim'><input name='code' placeholder='One-time claim code' required><button>Register with AssetTrack 360</button></form><form method='post' action='/send'><button>Send telemetry now</button></form></div>";return b;}
+void setupWeb(){const char*headers[]={"Cookie"};web.collectHeaders(headers,1);web.on("/",HTTP_GET,[]{if(!auth()){web.send(200,"text/html",html("Login","<div class='c'><form method='post' action='/login'><input name='user' value='admin'><input type='password' name='pw'><button>Login</button></form></div>"));return;}web.send(200,"text/html",html("T-SIM7000G Setup",statusPage()));});web.on("/login",HTTP_POST,[]{if(web.arg("user")!="admin"||web.arg("pw")!=(adminHash.length()?adminHash:"AssetTrack360")){web.send(403,"text/plain","Invalid login");return;}sessionId=String(esp_random(),HEX);web.sendHeader("Set-Cookie","AT360SESSION="+sessionId+"; Path=/; HttpOnly; SameSite=Lax");web.sendHeader("Location","/");web.send(302);});web.on("/save",HTTP_POST,[]{if(!auth()){web.send(403);return;}ssid=web.arg("ssid");wifiPw=web.arg("wpw");apn=web.arg("apn");apnUser=web.arg("apu");apnPass=web.arg("app");sdEnabled=web.hasArg("sd");save();connectWifi();initSD();connectCellular();web.sendHeader("Location","/");web.send(302);});web.on("/claim",HTTP_POST,[]{if(!auth()){web.send(403);return;}if(WiFi.status()!=WL_CONNECTED){web.send(409,"text/plain","Wi-Fi required for initial registration");return;}StaticJsonDocument<256>d;d["claim_code"]=web.arg("code");d["board_id"]=macId();d["profile_code"]=PROFILE_CODE;d["firmware"]=FW;String body;serializeJson(d,body);WiFiClientSecure c;c.setInsecure();HTTPClient h;h.begin(c,CLAIM_URL);h.addHeader("Content-Type","application/json");int code=h.POST(body);String r=h.getString();h.end();if(code<200||code>=300){web.send(code,"application/json",r);return;}StaticJsonDocument<512>x;if(deserializeJson(x,r)){web.send(502,"text/plain","Invalid claim response");return;}deviceUid=x["device_uid"].as<String>();deviceToken=x["device_token"].as<String>();save();web.send(200,"text/html",html("Registration complete","<div class='c ok'>Device registered: "+deviceUid+"</div>"));});web.on("/send",HTTP_POST,[]{if(!auth()){web.send(403);return;}sendNow();web.sendHeader("Location","/");web.send(302);});web.on("/health",HTTP_GET,[]{web.send(200,"application/json","{\"status\":\"ok\",\"profile\":\"AT360_LILYGO_T_SIM7000G\"}");});web.begin();}
+void setup(){Serial.begin(115200);pinMode(MODEM_PWRKEY,OUTPUT);pinMode(MODEM_DTR,OUTPUT);pinMode(LED_PIN,OUTPUT);digitalWrite(MODEM_PWRKEY,HIGH);physicalModemSafe();analogReadResolution(12);load();WiFi.mode(WIFI_AP_STA);String ap="AssetTrack360-TSIM-"+macId().substring(8);WiFi.softAPConfig(AP_IP,AP_IP,AP_MASK);WiFi.softAP(ap.c_str(),"AssetTrack360");dns.start(53,"*",AP_IP);setupWeb();connectWifi();initSD();ModemSerial.begin(115200,SERIAL_8N1,MODEM_RX,MODEM_TX);if(!simulation)connectCellular();Serial.println("AT360_READY|"+String(FW));Serial.println("BOARD_PROFILE|"+String(PROFILE_CODE));Serial.println("BOARD_FAMILY|"+String(BOARD_FAMILY));}
+void loop(){web.handleClient();dns.processNextRequest();if(millis()-lastUpload>=uploadSeconds*1000UL){lastUpload=millis();sendNow();}delay(5);}
