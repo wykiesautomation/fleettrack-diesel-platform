@@ -1,2 +1,0 @@
-# Part 9: SQL / ODBC Read-Only Studio
-Cumulative on Part 8. Adds local Edge ODBC configuration, DSN/driver discovery, schema discovery, bounded SELECT/WITH query preview, and result-column-to-signal mapping. Credentials remain secure environment references on the Edge PC. Autocommit is disabled, no commit exists, rollback is mandatory, and all write, DDL, procedure, SELECT INTO, and multi-statement SQL is blocked.

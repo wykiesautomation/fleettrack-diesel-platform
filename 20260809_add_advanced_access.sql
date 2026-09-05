@@ -1,3 +1,0 @@
-CREATE TABLE IF NOT EXISTS advanced_access_grant (id SERIAL PRIMARY KEY,customer_id INTEGER NOT NULL REFERENCES customer(id),device_id INTEGER REFERENCES device(id),active BOOLEAN NOT NULL DEFAULT TRUE,source VARCHAR(30) NOT NULL DEFAULT 'PAID',note VARCHAR(300),expires_at TIMESTAMPTZ,granted_by INTEGER NOT NULL REFERENCES "user"(id),created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),CONSTRAINT uq_advanced_access_customer_device UNIQUE(customer_id,device_id));
-CREATE INDEX IF NOT EXISTS ix_advanced_access_customer ON advanced_access_grant(customer_id);
-CREATE INDEX IF NOT EXISTS ix_advanced_access_device ON advanced_access_grant(device_id);
