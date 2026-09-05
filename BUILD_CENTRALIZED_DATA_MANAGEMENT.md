@@ -1,8 +1,7 @@
 # Centralized Data Management
-- Removes Asset Cleanup from normal Operations navigation.
-- Adds admin-only Data Management under Account.
-- Asset & Device Setup now performs only link, unlink, replace and site management.
-- Devices & Sources now performs status, manage and disable/enable without permanent deletion.
-- Permanent asset, empty-site and disabled/unlinked-device deletion is centralized in Data Management.
-- Existing deletion endpoints remain protected by customer-admin/platform-admin role checks and existing confirmation rules.
-- No assets, devices, sites, tokens, telemetry or history are changed by deployment.
+- Removes Asset Cleanup from Operations and adds Account → Data Management for customer/platform admins.
+- Keeps Asset & Device Setup limited to link, unlink, replace and safe site management.
+- Removes permanent device deletion from Devices & Sources.
+- Centralizes permanent asset, disabled/unlinked device and empty-site deletion on one protected page.
+- Requires exact names/UID plus DELETE and preserves transactional rollback safeguards.
+- No data is changed during deployment.
